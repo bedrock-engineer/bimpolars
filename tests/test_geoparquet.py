@@ -164,20 +164,21 @@ def test_duckdb_spatial_reads_the_footprints(
     path = tmp_path / "sixty5.parquet"
     sixty5_structural_features.write_parquet(path)
     source = f"read_parquet('{path.as_posix()}')"
-    types = connection.sql(
+    types = connection.execute(
         f"SELECT ST_GeometryType(footprint) AS type, count(*) AS n FROM {source} "
-        "WHERE footprint IS NOT NULL GROUP BY 1 ORDER BY 1"
+        "WHERE footprint IS NOT NULL GROUP BY 1"
     ).fetchall()
-    assert [(str(kind), n) for kind, n in types] == [("MULTIPOLYGON", 3), ("POLYGON", 2644)]
-    nulls = connection.sql(f"SELECT count(*) FROM {source} WHERE footprint IS NULL").fetchone()
-    assert nulls == (40,)
-    covered = connection.sql(
+    assert {str(kind): n for kind, n in types} == {"POLYGON": 2644, "MULTIPOLYGON": 3}
+    nulls = connection.execute(f"SELECT count(*) FROM {source} WHERE footprint IS NULL")
+    assert nulls.fetchone() == (40,)
+    covered = connection.execute(
         f"SELECT count(*) FROM {source} WHERE footprint IS NOT NULL AND NOT "
         "ST_Within(footprint, ST_MakeEnvelope(bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax))"
-    ).fetchone()
-    assert covered == (0,)
-    geo = connection.sql(
-        f"SELECT value FROM parquet_kv_metadata('{path.as_posix()}') WHERE key = 'geo'"
+    )
+    assert covered.fetchone() == (0,)
+    geo = connection.execute(
+        f"SELECT decode(value) FROM parquet_kv_metadata('{path.as_posix()}') "
+        "WHERE decode(key) = 'geo'"
     ).fetchone()
     assert geo is not None
-    assert json.loads(bytes(geo[0]))["primary_column"] == "footprint"
+    assert json.loads(geo[0])["primary_column"] == "footprint"
