@@ -321,6 +321,7 @@ def test_clamping_a_footprint_to_its_bbox_keeps_z() -> None:
     assert np.abs(z - (18.625 + 3.0)).max() < 1e-9
 
 
+@pytest.mark.filterwarnings("ignore:the best transformation")
 def test_footprints_moved_to_a_geographic_crs_keep_z(
     sixty5_structural_features: BimDataFrame,
 ) -> None:
@@ -350,12 +351,12 @@ def test_footprints_moved_to_a_geographic_crs_keep_z(
 def test_to_crs_warns_when_the_best_transformation_needs_missing_grids() -> None:
     """Without the NSGI grids PROJ falls back to a Helmert transformation; to_crs says so."""
     bdf = column_model()
-    group = pyproj.transformer.TransformerGroup("EPSG:7415", "OGC:CRS84h", always_xy=True)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
+        group = pyproj.transformer.TransformerGroup("EPSG:7415", "OGC:CRS84h", always_xy=True)
         to_crs(bdf, "OGC:CRS84h")
         to_crs(bdf, "EPSG:7415")  # to the base CRS: an exact conversion, nothing to warn about
-    about_grids = [w for w in caught if "grids" in str(w.message)]
+    about_grids = [w for w in caught if str(w.message).startswith("the best transformation")]
     if group.best_available:
         assert not about_grids
     else:
@@ -460,6 +461,7 @@ def native_geom_model() -> BimDataFrame:
     return bdf.with_frame(bdf.frame.with_columns(native))
 
 
+@pytest.mark.filterwarnings("ignore:the best transformation")
 def test_a_non_affine_target_drops_native_geom() -> None:
     bdf = native_geom_model()
     geographic = to_crs(bdf, "OGC:CRS84h")
@@ -511,6 +513,7 @@ def test_to_crs_refuses_what_pyproj_cannot_do() -> None:
         to_crs(georeferenced, "no such crs")
 
 
+@pytest.mark.filterwarnings("ignore:the best transformation")
 def test_linearized_site_to_ecef() -> None:
     matrix = linearized_site_to_ecef(SIXTY5.crs())
     # The reference: the closed-form georeferencing to RD New + NAP, then pyproj to ECEF
@@ -534,6 +537,7 @@ def test_linearized_site_to_ecef() -> None:
     assert np.abs(matrix @ [*site_m[0], 1] - [*ecef(site_m)[0], 1]).max() < 1e-4
 
 
+@pytest.mark.filterwarnings("ignore:the best transformation")
 def test_a_site_in_millimetres_and_one_in_metres_land_on_the_same_spot() -> None:
     """PROJ orders the vertical conversion of a derived CRS after a 3D Helmert, which then
     reads millimetres as metres; to_crs goes through the base CRS instead."""
