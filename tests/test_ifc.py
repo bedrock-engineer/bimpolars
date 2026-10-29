@@ -215,12 +215,18 @@ def test_prefab_facade() -> None:
 
 @pytest.mark.slow
 def test_architectural() -> None:
+    """The ArchiCAD export: 16,784 products and 191 per-type property sets with 35,068
+    properties, so the dense properties Struct alone takes about 5.5 GB (see CLAUDE.md)."""
     bdf = read_ifc(data.fetch(data.SIXTY5_ARCHITECTURAL))
-    frame = bdf.frame
+    # select the light columns first: a filter on the whole frame copies the properties
+    frame = bdf.frame.select("id", "class", "mesh", "bbox")
+    assert len(frame) == 16_784
     assert frame["id"].n_unique() == len(frame)
     assert len(frame.filter(pl.col("class") == "IfcBuildingStorey")) > 0
     with_mesh = frame.filter(pl.col("mesh").is_not_null())
-    assert len(with_mesh) > 10_000
+    assert len(with_mesh) == 16_760
     assert with_mesh["bbox"].null_count() == 0
     faces = style_faces(frame)
+    assert faces["n_faces"].sum() == 1_671_713
     assert faces.filter(pl.col("n_faces") != pl.col("n_faces_styled")).is_empty()
+    assert len(bdf.frame.schema["properties"].to_schema()) == 191

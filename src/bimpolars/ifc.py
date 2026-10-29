@@ -93,13 +93,15 @@ def read_ifc(
     del products
     if model is not source:
         del model
+    properties = properties_series(psets)
+    del psets
 
     frame = pl.DataFrame(
         [
             pl.Series("id", ids, dtype=pl.String),
             pl.Series("name", names, dtype=pl.String),
             pl.Series("class", classes, dtype=pl.Categorical),
-            properties_series(psets),
+            properties,
             pl.Series("container", containers, dtype=pl.String),
             pl.Series("elevation", elevations, dtype=pl.Float64),
             pl.Series("native_geom", [None] * len(ids), dtype=pl.Null),

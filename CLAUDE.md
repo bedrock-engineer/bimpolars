@@ -43,10 +43,13 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   + 21 spatial (site, building, 19 storeys) + 19 grids; 199,578 triangles; 15 styles (14
   IfcSurfaceStyle names of the 16 in the file, plus faces without a style); IFC2X3 in mm.
 - `sixty5_O-S1-BWK-BIM-prefab-facade.ifc`: 1055 elements, 18 storeys.
-- `sixty5_O-S1-BWK-BIM-architectural.ifc`: 343 MB, `slow`. ArchiCAD export: 16,784 products,
-  1.67 M triangles, 191 property sets (one per library part) with 35,068 distinct properties,
-  so the dense `properties` Struct alone takes about 2.7 GB in memory; `read_ifc` needs about
-  4 GB and two minutes.
+- `sixty5_O-S1-BWK-BIM-architectural.ifc`: 343 MB, `slow`. ArchiCAD export: 16,784 products
+  (16,760 with a mesh), 1,671,713 triangles, 191 property sets (one per library part) with
+  35,068 distinct properties. The dense `properties` Struct is 35,068 columns of 16,784 rows,
+  about 5.5 GB in memory (String columns cost 16 bytes per row whether null or not), so
+  `read_ifc` peaks near 8 GB and takes two minutes; without that column it needs 2.5 GB and
+  85 s. Select the columns you need before filtering such a frame. See #15 before changing
+  the layout of `properties`.
 - `rvt-advanced-sample-arch.ifc`: 5696 elements, 5 storeys.
 - `rvt-advanced-sample/speckle-v3-objects.parquet` and
   `rvt-advanced-sample/speckle-bundle/<model id>/<version id>/*.parquet`: Speckle data for
