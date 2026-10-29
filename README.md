@@ -26,7 +26,10 @@ columns.select(
     triangles=pl.col("mesh").struct.field("faces").list.len() // 3,
 )
 
-bdf = bimpolars.simple_features(bdf)  # adds footprint_ref: String, footprint: Binary (WKB)
+# Outline the elements, not the voids of the openings; the storeys stay to place the footprints
+elements = bdf.frame.filter(pl.col("class") != "IfcOpeningElement")
+bdf = bimpolars.simple_features(bdf.with_frame(elements))
+bdf.frame.schema  # + footprint_ref: String, footprint: Binary (ISO WKB)
 bdf.write_parquet("sixty5.parquet")  # GeoParquet: footprint is the primary geometry
 bimpolars.read_parquet("sixty5.parquet").equals(bdf)  # True, CRS included
 
@@ -70,7 +73,13 @@ Speckle (specklepy) will come as the extras `[geobim]` and `[speckle]`.
   - `footprint_ref`: the `id` of the row whose level the footprint lies at: the row's
     `container` when that has an `elevation` (the storey, for most elements), else the row
     itself at the lowest z of its mesh.
-  Decode the column with `shapely.from_wkb(bdf.frame["footprint"].to_numpy())`.
+  Every row's `container` must be in the frame: filter the elements, but keep the spatial
+  rows, or `simple_features` raises. Decode the column with
+  `shapely.from_wkb(bdf.frame["footprint"].to_numpy())`.
+- `plan_outline(vertices, faces)`: the plan outline of one triangle mesh as a 2D shapely
+  Polygon or MultiPolygon, the union of its triangles projected to XY, for a mesh outside a
+  frame. Slivers (triangles with less plan area than 1e-9 of the extent squared) are left
+  out.
 - `BimDataFrame(frame, crs)`: the thin wrapper with `.frame`, `.crs`, `.with_frame()`,
   `.equals()`, `.write_parquet()` and `BimDataFrame.read_parquet()`.
 - `read_parquet(source)`: reads a `BimDataFrame` back, CRS included. The CRS sits under the

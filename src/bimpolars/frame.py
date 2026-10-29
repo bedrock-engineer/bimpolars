@@ -157,7 +157,8 @@ class BimDataFrame:
         Args:
             file: Where to write: a path or a binary file object.
             **kwargs: Passed on to :meth:`polars.DataFrame.write_parquet`. A ``metadata`` dict
-                is written too, next to the :data:`METADATA_KEY` and ``geo`` entries.
+                is written too, except that its :data:`METADATA_KEY` and ``geo`` entries,
+                if any, are replaced by the ones described above.
         """
         metadata = dict(kwargs.pop("metadata", None) or {})
         metadata[METADATA_KEY] = json.dumps({"version": METADATA_VERSION, "crs": self._crs})

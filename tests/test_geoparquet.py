@@ -14,8 +14,8 @@ from bimpolars.frame import METADATA_KEY
 from bimpolars.geoparquet import (
     GEO_METADATA_KEY,
     GEOPARQUET_VERSION,
+    _wkb_geometry_types,
     geo_metadata,
-    wkb_geometry_types,
 )
 from tests.synthetic import SPATIAL, box, model
 
@@ -72,22 +72,32 @@ def test_geo_metadata_without_a_bbox_column(small: BimDataFrame) -> None:
 
 
 def test_wkb_geometry_types() -> None:
+    multipolygon = shapely.MultiPolygon([shapely.box(0, 0, 1, 1)])
     polygon_z = shapely.to_wkb(shapely.force_3d(shapely.box(0, 0, 1, 1), z=2), flavor="iso")
-    multi_z = shapely.to_wkb(
-        shapely.force_3d(shapely.MultiPolygon([shapely.box(0, 0, 1, 1)]), z=2), flavor="extended"
-    )
+    multi_z = shapely.to_wkb(shapely.force_3d(multipolygon, z=2), flavor="iso")
     point_big_endian = shapely.to_wkb(shapely.Point(1, 2), byte_order=0)
     series = pl.Series([polygon_z, None, multi_z, polygon_z, point_big_endian], dtype=pl.Binary)
-    assert wkb_geometry_types(series) == ["Point", "Polygon Z", "MultiPolygon Z"]
-    assert wkb_geometry_types(pl.Series([None], dtype=pl.Binary)) == []
-    assert wkb_geometry_types(pl.Series([], dtype=pl.Binary)) == []
+    assert _wkb_geometry_types(series) == ["Point", "Polygon Z", "MultiPolygon Z"]
+    assert _wkb_geometry_types(pl.Series([None], dtype=pl.Binary)) == []
+    assert _wkb_geometry_types(pl.Series([], dtype=pl.Binary)) == []
     with_m = shapely.to_wkb(shapely.from_wkt("POINT M (1 2 3)"), flavor="iso")
     with pytest.raises(ValueError, match="M coordinates"):
-        wkb_geometry_types(pl.Series([with_m], dtype=pl.Binary))
+        _wkb_geometry_types(pl.Series([with_m], dtype=pl.Binary))
     with pytest.raises(ValueError, match="not WKB"):
-        wkb_geometry_types(pl.Series([b"PAR1"], dtype=pl.Binary))
+        _wkb_geometry_types(pl.Series([b"PAR1"], dtype=pl.Binary))
     with pytest.raises(ValueError, match="unknown"):
-        wkb_geometry_types(pl.Series([b"\x01\x63\x00\x00\x00"], dtype=pl.Binary))
+        _wkb_geometry_types(pl.Series([b"\x01\x63\x00\x00\x00"], dtype=pl.Binary))
+
+
+def test_extended_wkb_is_refused() -> None:
+    # GeoParquet's WKB is ISO WKB: the PostGIS flavour with the Z, M or SRID flag is refused
+    with_z = shapely.to_wkb(shapely.force_3d(shapely.box(0, 0, 1, 1), z=2), flavor="extended")
+    with_srid = shapely.to_wkb(shapely.set_srid(shapely.Point(1, 2), 28992), include_srid=True)
+    for extended in (with_z, with_srid):
+        with pytest.raises(ValueError, match="extended WKB"):
+            _wkb_geometry_types(pl.Series([extended], dtype=pl.Binary))
+    plain = shapely.to_wkb(shapely.box(0, 0, 1, 1), flavor="extended")  # 2D: no flag set
+    assert _wkb_geometry_types(pl.Series([plain], dtype=pl.Binary)) == ["Polygon"]
 
 
 def test_write_parquet_writes_geoparquet(small: BimDataFrame, tmp_path: Path) -> None:

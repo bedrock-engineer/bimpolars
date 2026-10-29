@@ -18,7 +18,7 @@ from bimpolars import (
     read_ifc,
     simple_features,
 )
-from bimpolars.features import clamp, plan_outline
+from bimpolars.features import _clamp, plan_outline
 from bimpolars.frame import MODEL_COLUMNS
 from tests.synthetic import SPATIAL, box, merged, mesh, model
 
@@ -105,13 +105,22 @@ def test_slanted_triangles_project_to_their_shadow() -> None:
     assert plan_outline(vertices, np.zeros((0, 3), dtype=int)).is_empty
 
 
+def test_sliver_triangles_are_left_out() -> None:
+    # A 10 by 5 wall whose top edge leans 1e-12 out of its plane: vertical up to rounding
+    vertices = np.array([[0, 0, 0], [10, 0, 0], [10, 1e-12, 5], [0, 0, 5]], dtype=float)
+    faces = np.array([[0, 1, 2], [0, 2, 3]])
+    assert plan_outline(vertices, faces).is_empty
+    vertices[2, 1] = 1e-6  # a plan area of 5e-6 is above 1e-9 times the extent squared
+    assert plan_outline(vertices, faces).area == pytest.approx(5e-6)
+
+
 def test_clamp_keeps_an_outline_inside_its_box() -> None:
     low, high = np.array([0.0, 0.0]), np.array([10.0, 10.0])
     inside = shapely.box(1, 1, 9, 9)
-    assert clamp(inside, low, high) is inside
-    assert clamp(shapely.Polygon(), low, high).is_empty
+    assert _clamp(inside, low, high) is inside
+    assert _clamp(shapely.Polygon(), low, high).is_empty
     outside = shapely.box(-1e-9, 2, 10 + 1e-9, 8)
-    clamped = clamp(outside, low, high)
+    clamped = _clamp(outside, low, high)
     assert clamped.bounds == (0, 2, 10, 8)
     assert clamped.is_valid
 
@@ -134,6 +143,20 @@ def test_simple_features_checks_its_input() -> None:
     duplicated = bdf.with_frame(pl.concat([bdf.frame, bdf.frame]))
     with pytest.raises(ValueError, match="unique"):
         simple_features(duplicated)
+
+
+def test_a_frame_filtered_down_to_its_elements_is_refused() -> None:
+    column = {"id": "column", "class": "IfcColumn", "container": "storey"}
+    column["mesh"] = box(0, 0, 0, 1, 1, 1)
+    bdf = model([*SPATIAL, column])
+    columns_only = bdf.with_frame(bdf.frame.filter(pl.col("class") == "IfcColumn"))
+    with pytest.raises(ValueError, match="'storey'"):
+        simple_features(columns_only)
+    # Filtering the elements while keeping the spatial rows, or filtering afterwards, is fine
+    elements = bdf.with_frame(bdf.frame.filter(pl.col("class") != "IfcOpeningElement"))
+    assert simple_features(elements).frame["footprint_ref"].to_list()[-1] == "storey"
+    after = simple_features(bdf).frame.filter(pl.col("class") == "IfcColumn")
+    assert after["footprint_ref"].to_list() == ["storey"]
 
 
 def check_footprints(bdf: BimDataFrame) -> pl.DataFrame:
@@ -199,11 +222,25 @@ def test_sixty5_structural_footprints(sixty5_structural_features: BimDataFrame) 
     assert columns["area"].to_numpy() == pytest.approx(500 * 800)
 
 
+def test_sixty5_structural_filtered_to_its_elements(sixty5_structural: BimDataFrame) -> None:
+    frame = sixty5_structural.frame.drop("properties")
+    elements = frame.filter(pl.col("class") != "IfcOpeningElement")
+    bdf = simple_features(sixty5_structural.with_frame(elements))
+    assert len(bdf.frame) == 2687 - 1284
+    assert bdf.frame["footprint"].null_count() == 40
+    assert bdf.frame.filter(pl.col("class") == "IfcOpeningElement").is_empty()
+    columns = sixty5_structural.with_frame(frame.filter(pl.col("class") == "IfcColumn"))
+    with pytest.raises(ValueError, match="keep the spatial rows"):
+        simple_features(columns)
+
+
 def test_sixty5_prefab_facade_footprints() -> None:
     bdf = simple_features(read_ifc(data.fetch(data.SIXTY5_PREFAB_FACADE)))
     measures = check_footprints(bdf)
     assert len(measures) == 1055
-    assert measures["geom_type"].unique().to_list() == [3]
+    # One Jordahl console is two parts that touch along an edge in plan, up to rounding: the
+    # faces that bridged them have a plan area of 7e-10 and are slivers
+    assert dict(measures["geom_type"].value_counts().iter_rows()) == {3: 1054, 6: 1}
     assert not measures["empty"].any()
     assert measures.filter(pl.col("footprint_ref") != pl.col("container")).is_empty()
 
@@ -215,6 +252,6 @@ def test_sixty5_architectural_footprints() -> None:
     bdf = simple_features(bdf.with_frame(bdf.frame.drop("properties")))
     measures = check_footprints(bdf)
     assert len(measures) == 16_760
-    assert dict(measures["geom_type"].value_counts().iter_rows()) == {3: 15_674, 6: 1086}
+    assert dict(measures["geom_type"].value_counts().iter_rows()) == {3: 15_697, 6: 1063}
     assert measures["empty"].sum() == 3
     assert measures.filter(~pl.col("empty"))["area"].min() > 0

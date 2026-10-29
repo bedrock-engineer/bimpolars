@@ -23,6 +23,10 @@ FEATURE_COLUMNS: tuple[str, ...] = ("footprint_ref", "footprint")
 
 _REQUIRED_COLUMNS = ("id", "container", "elevation", "mesh", "bbox")
 
+_SLIVER = 1e-9
+"""A triangle with less plan area than this fraction of the mesh's plan extent squared is
+a sliver (a face that is vertical up to rounding) and is left out of the outline."""
+
 
 def simple_features(bdf: BimDataFrame, *, lightbim: bool = False) -> BimDataFrame:
     """Adds the plan footprint of every element with a mesh.
@@ -35,7 +39,7 @@ def simple_features(bdf: BimDataFrame, *, lightbim: bool = False) -> BimDataFram
       the elevation of the ``footprint_ref`` row. A mesh whose triangles are all vertical has
       no plan area and gets ``POLYGON Z EMPTY``; a row without a mesh gets null. Every mesh
       is outlined, an ``IfcOpeningElement``'s void included: filter openings out first for a
-      plan of the elements.
+      plan of the elements, keeping the spatial rows.
     - ``footprint_ref``: the ``id`` of the row whose level the footprint lies at: the row's
       ``container`` when that has an ``elevation`` (the storey, for most elements), otherwise
       the row itself, at the lowest z of its mesh. Null without a mesh.
@@ -49,7 +53,10 @@ def simple_features(bdf: BimDataFrame, *, lightbim: bool = False) -> BimDataFram
         The BimDataFrame with the two columns appended, in the same CRS.
 
     Raises:
-        ValueError: If a required column is missing or ``id`` is not unique.
+        ValueError: If a required column is missing, ``id`` is not unique, or a row's
+            ``container`` has no row in the frame: a frame filtered down to its elements
+            has lost the storeys that place the footprints, so it is refused rather than
+            silently outlined at every element's own level.
         NotImplementedError: If ``lightbim`` is True.
     """
     if lightbim:
@@ -60,6 +67,14 @@ def simple_features(bdf: BimDataFrame, *, lightbim: bool = False) -> BimDataFram
         raise ValueError(f"simple_features needs the columns {', '.join(missing)}")
     if frame["id"].n_unique() != len(frame):
         raise ValueError("simple_features needs a unique id per row")
+    containers = frame["container"].drop_nulls().unique()
+    lost = containers.filter(~containers.is_in(frame["id"].implode()))
+    if not lost.is_empty():
+        raise ValueError(
+            f"simple_features needs the row of every container, but {len(lost)} "
+            f"containers have none, such as {lost[0]!r}: keep the spatial rows when "
+            "filtering the elements"
+        )
     ref = _footprint_ref(frame)
     footprints = _footprints(frame["mesh"], ref["z"])
     return bdf.with_frame(frame.with_columns(ref["footprint_ref"], footprints))
@@ -109,22 +124,28 @@ def _footprints(mesh: pl.Series, z: pl.Series) -> pl.Series:
 def plan_outline(vertices: np.ndarray, faces: np.ndarray) -> shapely.Geometry:
     """The outline of a triangle mesh in plan: the union of its triangles projected to XY.
 
-    The outline never leaves the mesh's bounding box in plan, so the ``bbox`` column covers
-    it: when GEOS's robustness fallback rounds a vertex of the union a step outwards, the
-    outline is clamped back to the box.
+    A triangle whose plan area is below :data:`_SLIVER` times the square of the mesh's plan
+    extent is a sliver, a face that is vertical up to rounding, and is left out. The outline
+    never leaves the mesh's bounding box in plan, so the ``bbox`` column covers it: when
+    GEOS's robustness fallback rounds a vertex of the union a step outwards, the outline is
+    clamped back to the box.
 
     Args:
         vertices: The mesh's vertices, shape ``(n, 3)``.
         faces: The triangles as vertex indices, shape ``(m, 3)``.
 
     Returns:
-        A 2D Polygon or MultiPolygon, empty when every triangle is vertical.
+        A 2D Polygon or MultiPolygon, empty when every triangle is vertical or a sliver.
     """
+    if len(faces) == 0:
+        return shapely.Polygon()
+    low = vertices[:, :2].min(axis=0)
+    high = vertices[:, :2].max(axis=0)
     triangles = vertices[faces, :2]
     edge_1 = triangles[:, 1] - triangles[:, 0]
     edge_2 = triangles[:, 2] - triangles[:, 0]
-    doubled_area = edge_1[:, 0] * edge_2[:, 1] - edge_1[:, 1] * edge_2[:, 0]
-    flat = triangles[doubled_area != 0]
+    doubled_area = np.abs(edge_1[:, 0] * edge_2[:, 1] - edge_1[:, 1] * edge_2[:, 0])
+    flat = triangles[doubled_area > _SLIVER * float((high - low).max()) ** 2]
     if len(flat) == 0:
         return shapely.Polygon()
     outline = shapely.union_all(shapely.polygons(flat))
@@ -132,10 +153,10 @@ def plan_outline(vertices: np.ndarray, faces: np.ndarray) -> shapely.Geometry:
         # A union of areas gives areas; drop anything else GEOS might leave in a collection
         parts = shapely.get_parts(outline)
         outline = shapely.union_all(parts[shapely.get_dimensions(parts) == 2])
-    return clamp(outline, vertices[:, :2].min(axis=0), vertices[:, :2].max(axis=0))
+    return _clamp(outline, low, high)
 
 
-def clamp(geometry: shapely.Geometry, low: np.ndarray, high: np.ndarray) -> shapely.Geometry:
+def _clamp(geometry: shapely.Geometry, low: np.ndarray, high: np.ndarray) -> shapely.Geometry:
     """Moves the coordinates of a 2D geometry that lie outside a box onto its edge.
 
     Args:

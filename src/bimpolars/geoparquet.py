@@ -39,9 +39,8 @@ _WKB_TYPES = {
     7: "GeometryCollection",
 }
 
-_EWKB_Z = 0x80000000
-_EWKB_M = 0x40000000
-_EWKB_SRID = 0x20000000
+_EWKB_FLAGS = 0xE0000000
+"""The Z, M and SRID bits of extended WKB, which GeoParquet does not allow."""
 
 
 def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -60,7 +59,8 @@ def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any]) -> dict[str, Any] 
 
     Raises:
         TypeError: If a geometry column is not Binary.
-        ValueError: If a geometry column holds WKB that GeoParquet does not allow.
+        ValueError: If a geometry column holds values that are not ISO WKB, or WKB that
+            GeoParquet does not allow (see :func:`_wkb_geometry_types`).
     """
     present = [name for name in GEOMETRY_COLUMNS if name in frame.columns]
     if not present:
@@ -74,7 +74,7 @@ def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any]) -> dict[str, Any] 
             )
         column: dict[str, Any] = {
             "encoding": "WKB",
-            "geometry_types": wkb_geometry_types(frame[name]),
+            "geometry_types": _wkb_geometry_types(frame[name]),
             "crs": dict(crs),
         }
         if covering is not None:
@@ -99,11 +99,12 @@ def _is_bbox(dtype: pl.DataType | None) -> bool:
     return all(fields.get(name) in (pl.Float32, pl.Float64) for name in _BBOX_FIELDS)
 
 
-def wkb_geometry_types(wkb: pl.Series) -> list[str]:
-    """The GeoParquet ``geometry_types`` of a column of WKB values.
+def _wkb_geometry_types(wkb: pl.Series) -> list[str]:
+    """The GeoParquet ``geometry_types`` of a column of ISO WKB values.
 
-    Only the type codes are read, not the coordinates. ISO WKB (``1003`` for a Polygon Z) and
-    extended WKB (the ``0x80000000`` flag) are both understood.
+    Only the type codes are read, not the coordinates. GeoParquet's ``WKB`` encoding is ISO
+    WKB (``1003`` for a Polygon Z), so extended WKB, with the Z, M or SRID flag of PostGIS in
+    the type code, is refused rather than described as ISO.
 
     Args:
         wkb: A Binary Series of WKB geometries; nulls are skipped.
@@ -113,7 +114,8 @@ def wkb_geometry_types(wkb: pl.Series) -> list[str]:
         in the order of their type codes; empty for a column without values.
 
     Raises:
-        ValueError: If a value is not WKB, or has M coordinates (not allowed in GeoParquet).
+        ValueError: If a value is not WKB, is extended WKB, or has M coordinates (not allowed
+            in GeoParquet).
     """
     values = wkb.drop_nulls()
     if values.is_empty():
@@ -135,15 +137,14 @@ def wkb_geometry_types(wkb: pl.Series) -> list[str]:
 
 
 def _type_name(code: int) -> str:
-    """The GeoParquet name of a WKB geometry type code."""
-    has_z = bool(code & _EWKB_Z)
-    has_m = bool(code & _EWKB_M)
-    base = code & ~(_EWKB_Z | _EWKB_M | _EWKB_SRID)
-    dimension, base = divmod(base, 1000)
-    has_z = has_z or dimension in (1, 3)
-    has_m = has_m or dimension in (2, 3)
+    """The GeoParquet name of an ISO WKB geometry type code."""
+    if code & _EWKB_FLAGS:
+        raise ValueError(
+            f"geometry type code {code:#x} is extended WKB; GeoParquet takes ISO WKB only"
+        )
+    dimension, base = divmod(code, 1000)
     if base not in _WKB_TYPES or dimension > 3:
         raise ValueError(f"unknown WKB geometry type code {code}")
-    if has_m:
+    if dimension >= 2:
         raise ValueError("GeoParquet does not allow geometries with M coordinates")
-    return _WKB_TYPES[base] + (" Z" if has_z else "")
+    return _WKB_TYPES[base] + (" Z" if dimension == 1 else "")

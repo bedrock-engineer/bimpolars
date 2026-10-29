@@ -7,7 +7,7 @@ reads a model back from the (Geo)Parquet that :meth:`BimDataFrame.write_parquet`
 """
 
 from bimpolars.crs import LinearUnit, engineering_crs, linear_unit
-from bimpolars.features import FEATURE_COLUMNS, FOOTPRINT_DTYPE, simple_features
+from bimpolars.features import FEATURE_COLUMNS, FOOTPRINT_DTYPE, plan_outline, simple_features
 from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, STYLE_DTYPE, BimDataFrame, read_parquet
 from bimpolars.ifc import read_ifc
 from bimpolars.properties import properties_series
@@ -24,6 +24,7 @@ __all__ = [
     "LinearUnit",
     "engineering_crs",
     "linear_unit",
+    "plan_outline",
     "properties_series",
     "read_ifc",
     "read_parquet",
