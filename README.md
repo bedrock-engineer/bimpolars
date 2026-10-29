@@ -197,20 +197,22 @@ SELECT id, ST_Area(footprint) FROM read_parquet('sixty5.parquet') WHERE bbox.xma
 ```python
 from pathlib import Path
 
-frame = bdf.with_frame(bdf.frame.filter(pl.col("class").is_in(["IfcColumn", "IfcBeam"])))
-Path("frame.glb").write_bytes(bimpolars.element_meshes_glb(frame))
+structure = bdf.with_frame(bdf.frame.filter(pl.col("class").is_in(["IfcColumn", "IfcBeam"])))
+Path("structure.glb").write_bytes(bimpolars.element_meshes_glb(structure))
 ```
 
 - One primitive and one material per style: the faces of every mesh are grouped by the
   `(name, rgba)` of their style, so a viewer colours the model as its authoring tool did
   (translucent styles get `alphaMode` BLEND). `IfcOpeningElement` rows are left out: their
   mesh is the void they cut.
-- Metres, from the model's unit (`linear_unit(bdf.crs)`), as glTF requires.
-- The vertex data keeps the model's z-up coordinates; the root node, named after the CRS and
-  carrying it as `extras.crs`, rotates the scene to glTF's y-up (`bimpolars.gltf.Y_UP_ROTATION`,
-  the 3D Tiles convention: model `(x, y, z)` is scene `(x, z, -y)`). A child node at the centre
-  of the model's bounding box holds the mesh, so that the float32 vertices stay precise for a
-  model far from the origin. In CesiumJS, place the model with
+- Metres, from the model's unit (`linear_unit(bdf.crs)`), as glTF requires. The root node
+  carries the model CRS as `extras.crs` and, next to it, `extras.unit` (`"metre"`): the CRS
+  keeps its own unit, the vertex data under the node does not.
+- The vertex data keeps the model's z-up coordinates; the root node, named after the CRS,
+  rotates the scene to glTF's y-up (`bimpolars.gltf.Y_UP_ROTATION`, the 3D Tiles convention:
+  model `(x, y, z)` is scene `(x, z, -y)`). A child node at the centre of the written
+  vertices' bounding box holds the mesh, so that the float32 vertices stay precise for a model
+  far from the origin. In CesiumJS, place the model with
   `Model.fromGltfAsync({url, modelMatrix, forwardAxis: Cesium.Axis.X})` (the default up axis)
   and the matrix of `linearized_site_to_ecef`.
 - `normals=True` (the default) writes flat-shaded triangles: every triangle gets its own

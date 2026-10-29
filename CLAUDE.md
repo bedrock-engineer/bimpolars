@@ -69,9 +69,11 @@ model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` a
   `POLYGON Z EMPTY`. The footprint's bounds stay inside the row's `bbox`.
 - glTF (`gltf.py`) is hand-written glb 2.0, no glTF library in the core: vertices in metres
   (scaled by the CRS unit) and z up in the accessors, a root node with `Y_UP_ROTATION` (named
-  after the CRS, the CRS in `extras.crs`) that makes the scene y-up as the spec wants, and a
-  child node translated to the bbox centre holding the mesh so that float32 stays precise far
-  from the origin. One primitive and material per `(name, rgba)` style, sorted by name with
+  after the CRS; `extras.crs` is the model CRS in its own unit and `extras.unit` says the data
+  is in metres) that makes the scene y-up as the spec wants, and a child node translated to
+  the centre of the written vertices' bounding box (not the `bbox` column: openings and
+  meshless rows are left out) holding the mesh so that float32 stays precise far from the
+  origin. One primitive and material per `(name, rgba)` style, sorted by name with
   the unstyled last; `IfcOpeningElement` rows left out. `normals=True` (default) writes
   non-indexed triangles with flat normals (3 vertices per face: ifcopenshell welds vertices
   by position, so averaged vertex normals would shade a box smooth); `normals=False` writes

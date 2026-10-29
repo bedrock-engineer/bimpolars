@@ -562,7 +562,8 @@ def test_the_core_imports_without_pyproj() -> None:
     code = (
         "import sys; sys.modules['pyproj'] = None\n"
         "import bimpolars\n"
-        "import bimpolars.data, bimpolars.features, bimpolars.geoparquet, bimpolars.ifc\n"
+        "import bimpolars.data, bimpolars.features, bimpolars.geoparquet, bimpolars.gltf\n"
+        "import bimpolars.ifc\n"
         "print(bimpolars.engineering_crs('ok')['name'])\n"
         "try:\n"
         "    import bimpolars.geobim\n"

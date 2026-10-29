@@ -17,8 +17,14 @@ import polars as pl
 import pytest
 import trimesh
 
-from bimpolars import BimDataFrame, element_meshes_glb, engineering_crs, triangles_glb
-from bimpolars.gltf import Y_UP_ROTATION
+from bimpolars import (
+    BimDataFrame,
+    element_meshes_glb,
+    engineering_crs,
+    linear_unit,
+    triangles_glb,
+)
+from bimpolars.gltf import _FLOAT, _UNSIGNED_INT, _UNSIGNED_SHORT, UNIT, Y_UP_ROTATION
 from tests.synthetic import SPATIAL, box, merged, model
 
 GREY = [0.7, 0.7, 0.7, 1.0]
@@ -54,7 +60,8 @@ def accessor(gltf: dict[str, Any], binary: bytes, index: int) -> np.ndarray:
     """Decodes an accessor into a numpy array."""
     item = gltf["accessors"][index]
     view = gltf["bufferViews"][item["bufferView"]]
-    dtype = {5126: np.float32, 5123: np.uint16, 5125: np.uint32}[item["componentType"]]
+    dtype = {_FLOAT: np.float32, _UNSIGNED_SHORT: np.uint16, _UNSIGNED_INT: np.uint32}
+    dtype = dtype[item["componentType"]]
     width = {"SCALAR": 1, "VEC3": 3}[item["type"]]
     offset = view["byteOffset"] + item.get("byteOffset", 0)
     assert offset % np.dtype(dtype).itemsize == 0
@@ -89,9 +96,18 @@ def corner_set(triangles: Any) -> set[tuple[float, ...]]:
     return {tuple(np.round(t.ravel(), 6).tolist()) for t in triangles}
 
 
-def mesh_corners(row: dict[str, Any], scale: float = 0.001) -> Any:
-    vertices = np.asarray(row["vertices"]).reshape(-1, 3) * scale
-    return vertices[np.asarray(row["faces"]).reshape(-1, 3)]
+def mesh_corners(bdf: BimDataFrame, row_id: str) -> Any:
+    """A row's triangles as (n, 3, 3) corners in metres, from the mesh column."""
+    mesh = bdf.frame.filter(pl.col("id") == row_id)["mesh"][0]
+    scale = linear_unit(bdf.crs).conversion_factor
+    vertices = np.asarray(mesh["vertices"]).reshape(-1, 3) * scale
+    return vertices[np.asarray(mesh["faces"]).reshape(-1, 3)]
+
+
+def sorted_triangles(triangles: Any) -> Any:
+    """Triangles as (n, 9) rows in a canonical order, for comparing two sets of them."""
+    rows = np.asarray(triangles).reshape(-1, 9)
+    return rows[np.lexsort(rows.T[::-1])]
 
 
 def load(glb: bytes) -> trimesh.Scene:
@@ -142,8 +158,7 @@ def test_one_primitive_and_material_per_style(styled_model: BimDataFrame) -> Non
 def test_openings_and_rows_without_a_mesh_are_left_out(styled_model: BimDataFrame) -> None:
     gltf, binary = read_glb(element_meshes_glb(styled_model))
     by_material = model_triangles(gltf, binary)
-    rows = {row["id"]: row for row in styled_model.frame.iter_rows(named=True)}
-    column, beam, window = (mesh_corners(rows[i]["mesh"]) for i in ("column", "beam", "window"))
+    column, beam, window = (mesh_corners(styled_model, i) for i in ("column", "beam", "window"))
     assert sum(len(t) for t in by_material.values()) == 48
     assert corner_set(by_material[0]) == corner_set(column) | corner_set(beam[12:])
     assert corner_set(by_material[1]) == corner_set(window)
@@ -181,11 +196,10 @@ def test_without_normals_the_glb_holds_the_mesh_column(styled_model: BimDataFram
     positions = accessor(gltf, binary, primitives[0]["attributes"]["POSITION"])
     # column 8 + beam 16 + window 8 vertices; the opening's and the grid's are not written
     assert len(positions) == 32
-    assert gltf["accessors"][primitives[0]["indices"]]["componentType"] == 5123
+    assert gltf["accessors"][primitives[0]["indices"]]["componentType"] == _UNSIGNED_SHORT
     assert sum(gltf["accessors"][p["indices"]]["count"] for p in primitives) == 48 * 3
     by_material = model_triangles(gltf, binary)
-    rows = {row["id"]: row for row in styled_model.frame.iter_rows(named=True)}
-    expected = np.concatenate([mesh_corners(rows[i]["mesh"]) for i in ("column", "beam", "window")])
+    expected = np.concatenate([mesh_corners(styled_model, i) for i in ("column", "beam", "window")])
     assert corner_set(np.concatenate(list(by_material.values()))) == corner_set(expected)
 
 
@@ -195,7 +209,7 @@ def test_scene_is_in_metres_and_y_up(styled_model: BimDataFrame) -> None:
     root, child = gltf["nodes"]
     assert root["rotation"] == pytest.approx(Y_UP_ROTATION)
     assert root["name"] == "Synthetic"
-    assert root["extras"]["crs"] == styled_model.crs
+    assert root["extras"] == {"crs": styled_model.crs, "unit": UNIT}
     assert "mesh" not in root
     assert child["translation"] == pytest.approx([2.5, 0.25, 1.5])
     position = gltf["accessors"][gltf["meshes"][0]["primitives"][0]["attributes"]["POSITION"]]
@@ -250,6 +264,24 @@ def test_element_meshes_glb_checks_its_input() -> None:
     broken["mesh"]["styles"][0]["face_count"] = 11
     with pytest.raises(ValueError, match="styles"):
         element_meshes_glb(model([broken]))
+    uncoloured = {"id": "uncoloured", "class": "IfcSlab", "mesh": box(0, 0, 0, 1, 1, 1)}
+    uncoloured["mesh"]["styles"][0]["rgba"] = None
+    with pytest.raises(ValueError, match="rgba"):
+        element_meshes_glb(model([uncoloured]))
+    nan = {"id": "nan", "class": "IfcSlab", "mesh": box(0, 0, 0, 1, 1, 1)}
+    nan["mesh"]["vertices"][0] = float("nan")
+    with pytest.raises(ValueError):
+        element_meshes_glb(model([nan]))
+
+
+def test_a_face_outside_its_own_mesh_is_rejected() -> None:
+    # The second box has the vertices the first box's face points at, so only a per-mesh
+    # check catches it
+    first = {"id": "first", "class": "IfcSlab", "mesh": box(0, 0, 0, 1, 1, 1)}
+    first["mesh"]["faces"][0] = 9
+    second = {"id": "second", "class": "IfcSlab", "mesh": box(2, 0, 0, 3, 1, 1)}
+    with pytest.raises(ValueError, match="outside"):
+        element_meshes_glb(model([first, second]))
 
 
 def test_a_frame_without_the_class_column_writes_every_mesh() -> None:
@@ -257,6 +289,15 @@ def test_a_frame_without_the_class_column_writes_every_mesh() -> None:
     assert "meshes" not in read_glb(element_meshes_glb(bdf))[0]
     unclassed = bdf.with_frame(bdf.frame.drop("class"))
     assert len(read_glb(element_meshes_glb(unclassed))[0]["meshes"][0]["primitives"]) == 1
+
+
+def test_a_row_with_a_null_class_is_written() -> None:
+    bdf = model([{"id": "a", "class": None, "mesh": box(0, 0, 0, 1, 1, 1)}])
+    assert bdf.frame["class"].null_count() == 1
+    gltf, binary = read_glb(element_meshes_glb(bdf))
+    assert len(gltf["meshes"][0]["primitives"]) == 1
+    (triangles,) = model_triangles(gltf, binary).values()
+    assert len(triangles) == 12
 
 
 def test_triangles_glb_writes_flat_shaded_groups() -> None:
@@ -301,6 +342,8 @@ def test_sixty5_structural_glb(sixty5_structural: BimDataFrame) -> None:
     assert counts == {"vertices": 89_740, "faces": 177_130}
     styles = rows.select(struct_.field("styles")).explode("styles").unnest("styles")
     assert len(styles.select("name", "rgba").unique()) == 12
+    scale = linear_unit(sixty5_structural.crs).conversion_factor
+    assert scale == 0.001
 
     glb = element_meshes_glb(sixty5_structural)
     gltf, binary = read_glb(glb)
@@ -322,21 +365,21 @@ def test_sixty5_structural_glb(sixty5_structural: BimDataFrame) -> None:
         else pl.col("bbox").struct.field(f).max()
         for f in ("xmin", "ymin", "zmin", "xmax", "ymax", "zmax")
     ).row(0)
-    low, high = y_up(bbox[:3]) / 1000, y_up(bbox[3:]) / 1000
+    low, high = y_up(bbox[:3]) * scale, y_up(bbox[3:]) * scale
     assert scene.bounds[0] == pytest.approx(np.minimum(low, high), abs=1e-5)
     assert scene.bounds[1] == pytest.approx(np.maximum(low, high), abs=1e-5)
 
-    indexed, binary = read_glb(element_meshes_glb(sixty5_structural, normals=False))
+    indexed, indexed_binary = read_glb(element_meshes_glb(sixty5_structural, normals=False))
     primitives = indexed["meshes"][0]["primitives"]
     assert len(primitives) == 12
     position = indexed["accessors"][primitives[0]["attributes"]["POSITION"]]
     assert position["count"] == 89_740
-    assert indexed["accessors"][primitives[0]["indices"]]["componentType"] == 5125
+    assert indexed["accessors"][primitives[0]["indices"]]["componentType"] == _UNSIGNED_INT
     assert sum(indexed["accessors"][p["indices"]]["count"] for p in primitives) == 3 * 177_130
     # The same triangles either way
-    flat = model_triangles(gltf, binary=read_glb(glb)[1])
-    both = model_triangles(indexed, binary)
+    flat = model_triangles(gltf, binary)
+    both = model_triangles(indexed, indexed_binary)
     for material in range(12):
-        assert np.sort(flat[material].reshape(-1, 9), axis=0) == pytest.approx(
-            np.sort(both[material].reshape(-1, 9), axis=0), abs=1e-5
+        assert sorted_triangles(flat[material]) == pytest.approx(
+            sorted_triangles(both[material]), abs=1e-5
         )
