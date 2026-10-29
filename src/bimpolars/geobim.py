@@ -12,6 +12,7 @@ it.
 
 from __future__ import annotations
 
+import functools
 import json
 import math
 import os
@@ -446,12 +447,31 @@ def _transformer(source: pyproj.CRS, target: pyproj.CRS) -> _Transformation:
 
 
 def _warn_about_missing_grids(start: pyproj.CRS, end: pyproj.CRS) -> None:
-    """Warns when PROJ's best transformation between two CRSs needs grids it does not have."""
+    """Warns when PROJ's best transformation between two CRSs needs grids it does not have.
+
+    The warning is attributed to the caller outside bimpolars, so that Python's default filter
+    shows it once per call site.
+    """
+    message = _missing_grids_message(start, end)
+    if message is not None:
+        warnings.warn(message, UserWarning, skip_file_prefixes=(_PACKAGE_DIR,))
+
+
+@functools.cache
+def _missing_grids_message(start: pyproj.CRS, end: pyproj.CRS) -> str | None:
+    """The text of the grid warning for a pair of CRSs, or None when the best operation runs.
+
+    Memoised per pair: enumerating the candidate operations costs about 0.2 s, and only the
+    first check should disturb the warning registry (leaving ``catch_warnings`` invalidates
+    it, so that a once-per-call-site filter would show the warning on every call).
+    """
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # pyproj warns too, with less to go on
+        warnings.filterwarnings(  # pyproj warns too, with less to go on
+            "ignore", message="Best transformation is not available", module="pyproj.transformer"
+        )
         group = TransformerGroup(start, end, always_xy=True)
     if group.best_available:
-        return
+        return None
     grids = sorted(
         {
             grid.short_name
@@ -460,13 +480,17 @@ def _warn_about_missing_grids(start: pyproj.CRS, end: pyproj.CRS) -> None:
             if not grid.available
         }
     )
-    fallback = group.transformers[0].description if group.transformers else "nothing"
-    warnings.warn(
+    # The lazy transformer runs the first available operation that is not a ballpark one
+    fallback = next(
+        (t.description for t in group.transformers if "Ballpark" not in t.description),
+        "a ballpark operation",
+    )
+    return (
         f"the best transformation from {start.name!r} to {end.name!r} needs the grids "
-        f"{', '.join(grids)}, which PROJ cannot find; it uses {fallback!r} instead (about a "
-        f"metre off for RD New to ETRS89). Install the grids or enable the PROJ network "
-        f"(pyproj.network.set_network_enabled(True))",
-        skip_file_prefixes=(_PACKAGE_DIR,),
+        f"{', '.join(grids)}, which PROJ cannot find; it runs {fallback!r} instead, which is "
+        f"less accurate (a Helmert transformation is good to about a metre, and a ballpark "
+        f"vertical step passes orthometric heights off as ellipsoidal ones). Install the "
+        f"grids or enable the PROJ network (pyproj.network.set_network_enabled(True))"
     )
 
 
