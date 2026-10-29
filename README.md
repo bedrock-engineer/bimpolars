@@ -43,10 +43,11 @@ geopandas.read_parquet("sixty5.parquet", columns=["id", "class", "footprint"]).c
 
 ```sh
 uv add bimpolars  # or: pip install bimpolars
+uv add "bimpolars[geobim]"  # with pyproj, for georeferencing
 ```
 
-The core depends on polars, numpy, shapely and ifcopenshell. Georeferencing (pyproj) and
-Speckle (specklepy) will come as the extras `[geobim]` and `[speckle]`.
+The core depends on polars, numpy, shapely and ifcopenshell. Georeferencing (pyproj) is the
+extra `[geobim]`; Speckle (specklepy) will come as the extra `[speckle]`.
 
 ## Functions
 
@@ -92,6 +93,61 @@ Speckle (specklepy) will come as the extras `[geobim]` and `[speckle]`.
 - `bimpolars.data.fetch(key, *, download=True)`: the path of a test or example model, downloaded
   from `http://r2.eu.bedrock.engineer/bimpolars/` on first use into `bimpolars.data.data_dir()`:
   `BIMPOLARS_DATA_DIR`, else `$XDG_CACHE_HOME/bimpolars`, else `~/.cache/bimpolars`.
+
+## Georeferencing
+
+`bimpolars.geobim` needs pyproj (the `[geobim]` extra). A model from a reader sits in its own
+coordinates; georeferencing says where that is on earth:
+
+```python
+from bimpolars.geobim import derived_engineering_crs, set_crs, to_crs
+
+# Sixty5: the site origin at RD New (160071.5, 384156.5), NAP +18.625 m, the site's y-axis
+# 50.36 degrees clockwise from grid north, in the model's millimetres
+crs = derived_engineering_crs(
+    "EPSG:7415",
+    160071.5,
+    384156.5,
+    18.625,
+    -50.36,
+    unit=bimpolars.linear_unit(bdf.crs),
+    name="Sixty5",
+)
+site = set_crs(bdf, crs)  # the same geometry, now a georeferenced Engineering CRS
+rd = to_crs(site, "EPSG:7415")  # meshes, footprints, bbox and storey levels in RD New + NAP metres
+rd.write_parquet("sixty5_rd.parquet")  # GeoParquet with EPSG:7415
+geog = to_crs(site, "OGC:CRS84h")  # longitude, latitude, ellipsoidal height
+```
+
+- `derived_engineering_crs(base_crs, easting, northing, orthometric_height, rotation, *, unit, name)`:
+  the Engineering CRS of a site as PROJJSON, derived from a compound of a projected and a
+  vertical CRS such as EPSG:7415 (RD New + NAP height): a DerivedProjectedCRS with an Affine
+  parametric transformation (EPSG:9624) and a DerivedVerticalCRS with a Vertical Offset
+  (EPSG:9616), with the axes in the site's `unit`. The site origin lands on
+  `(easting, northing, orthometric_height)` and the site's y-axis points `rotation` degrees
+  counterclockwise from grid north (for an IfcMapConversion:
+  `degrees(atan2(XAxisOrdinate, XAxisAbscissa))`). PROJ then chains site → base → anything.
+- `set_crs(bdf, crs)`: labels the model with a CRS (PROJJSON, a `pyproj.CRS` or user input such
+  as `"EPSG:7415"`) without moving the geometry, like `GeoDataFrame.set_crs`. The CRS must have
+  three axes.
+- `to_crs(bdf, crs)`: moves the model to another CRS with one pyproj transformation, like
+  `GeoDataFrame.to_crs`: the `mesh` vertices, the WKB columns in the model CRS (`footprint`,
+  later `lightbim`; never `geog`) and the storey `elevation`s (at the plan centre of the
+  model) move together, and `bbox` is recomputed from the moved meshes. The target must have
+  three axes, so that the meshes keep one unit per axis: `"EPSG:7415"`, not `"EPSG:28992"`.
+  `native_geom` keeps its placement only under an affine transformation (to the base CRS of
+  the Engineering CRS, for instance); a geographic, geocentric or differently projected target
+  nulls it. A derived CRS is passed through its base CRS, because PROJ otherwise applies a
+  3D Helmert transformation to heights still in the site's unit.
+- `affine_transformation(bdf, crs)`: the 4x4 matrix `to_crs` would apply to a placement, or
+  None when the transformation is not affine over the model (within `AFFINE_TOLERANCE`, 1 µm).
+- `linearized_site_to_ecef(crs)`: the 4x4 matrix from site metres to ECEF metres (EPSG:4978),
+  linearized at the site origin, for CesiumJS and 3D Tiles.
+
+Transformations to ETRS89 (`EPSG:4937`, `OGC:CRS84h`, ECEF) should follow RDNAPTRANS™2018,
+which PROJ does only with the NSGI grids `nl_nsgi_rdtrans2018.tif` and `nl_nsgi_nlgeo2018.tif`
+(install them, or enable the PROJ network). Without them PROJ silently falls back to a Helmert
+transformation that is good to about a metre, and passes NAP heights off as ellipsoidal heights.
 
 ## GeoParquet
 

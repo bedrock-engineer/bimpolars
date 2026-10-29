@@ -5,7 +5,9 @@ polars DataFrame with one row per element and one model CRS as PROJJSON (`src/bi
 Readers fill the columns in `MODEL_COLUMNS`; `read_ifc` (`src/bimpolars/ifc.py`) is the first one.
 `simple_features` (`src/bimpolars/features.py`) adds the `FEATURE_COLUMNS` `footprint_ref` and
 `footprint`; `src/bimpolars/geoparquet.py` builds the `geo` metadata that makes the written
-Parquet GeoParquet.
+Parquet GeoParquet. `src/bimpolars/geobim.py` (the `[geobim]` extra, pyproj) georeferences a
+model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` and
+`linearized_site_to_ecef`.
 
 ## Rules
 
@@ -14,11 +16,30 @@ Parquet GeoParquet.
   pass. Tests that read a model of hundreds of MB are marked `slow` and run only with
   `uv run pytest -m slow`.
 - Typed code with Google-style docstrings (ruff enforces `D` with the google convention).
-- The core imports neither pyproj nor specklepy. The plan: #6 adds the extra `[geobim]`
-  (pyproj) and #10 the extra `[speckle]` (specklepy), each in its own module. Until then
-  pyproj is a dev dependency only, used to check the PROJJSON. CRSs are PROJJSON dicts
+- The core imports neither pyproj nor specklepy. pyproj lives in `bimpolars.geobim` behind
+  the extra `[geobim]` (#6); #10 adds the extra `[speckle]` (specklepy) in its own module.
+  `tests/test_geobim.py::test_the_core_imports_without_pyproj` imports the core in a
+  subprocess with `sys.modules["pyproj"] = None` to keep it that way. CRSs are PROJJSON dicts
   (`src/bimpolars/crs.py`) so the core can build and store them without pyproj. shapely is a
   core dependency (the footprints need it).
+- `to_crs` moves `mesh`, the WKB columns of `geobim.WKB_COLUMNS` (`footprint`, `lightbim`
+  once #11 adds it; never `geog`, which is always OGC:CRS84h) and `elevation` (as a point at
+  the plan centre of the model), recomputes `bbox` from the moved meshes, and keeps the
+  footprints inside their `bbox`. It nulls `native_geom` when the transformation is not
+  affine over the model (`affine_transformation` gives the 4x4 matrix when it is; #11 uses it
+  to place its sweeps and replaces the `NotImplementedError` for a filled column). Targets
+  must have three axes (`EPSG:7415`, never `EPSG:28992`): the model's unit becomes the
+  target's, and a model stays in one unit per axis.
+- PROJ applies the deriving conversion of a DerivedVerticalCRS after the geodetic step of the
+  horizontal part, so a 3D Helmert transformation (the fallback without grids) reads a
+  millimetre site's heights as metres: 0.7 m of horizontal error at 50 m height, and an ECEF
+  linearization tilted by 0.8 degrees. `geobim._transformer` therefore goes through the base
+  CRS of a derived compound CRS; keep every transformation on that path.
+- Without the NSGI grids (`nl_nsgi_rdtrans2018.tif`, `nl_nsgi_nlgeo2018.tif`; cdn.proj.org is
+  blocked from the cloud containers, and the PROJ network is off) PROJ falls back to a Helmert
+  transformation that is good to about a metre and a ballpark vertical step that passes NAP
+  heights off as ellipsoidal heights. A test of a transformation to ETRS89 must state that
+  tolerance or check the operation PROJ picked (`Transformer.description`).
 - Geometry stays in the model's own coordinates and length unit (millimetres for most IFCs);
   the CRS carries the unit. Never convert to metres silently.
 - Rows are every `IfcProduct`. On the structural model 1,284 of the 2,647 element rows are
@@ -60,6 +81,13 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   Footprints: 2644 `Polygon Z` + 3 `MultiPolygon Z` (openings included), none empty, every
   element in a storey with an elevation; the `kolom vierkant_gen_lxb 500x800` columns have a
   plan area of 400,000.
+  Georeferencing (IFC-GeoReferencer export of the architectural model, EPSG:7415): the site
+  origin at E 160071.5, N 384156.5, NAP +18.625 (AHN4 at the origin), the x-axis
+  (0.6379617540893054, -0.7700680491484481) in the grid, so the rotation is -50.36 degrees;
+  `to_crs` to EPSG:7415 takes 0.2 s and puts the model within 100 m of the origin between NAP
+  -11.8 and +75.3 m, the 146 pile heads (tip + Depth along the extrusion, as in
+  `sixty5_piles.py`) within 0.2 mm in plan of the centre of their moved `bbox` and at its
+  `zmax`.
 - `sixty5_O-S1-BWK-BIM-prefab-facade.ifc`: 1055 elements, 18 storeys; 1054 `Polygon Z` + 1
   `MultiPolygon Z` (a console whose two parts touch along an edge, up to rounding).
 - `sixty5_O-S1-BWK-BIM-architectural.ifc`: 343 MB, `slow`. ArchiCAD export: 16,784 products
