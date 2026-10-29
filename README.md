@@ -33,6 +33,10 @@ bdf.frame.schema  # + footprint_ref: String, footprint: Binary (ISO WKB)
 bdf.write_parquet("sixty5.parquet")  # GeoParquet: footprint is the primary geometry
 bimpolars.read_parquet("sixty5.parquet").equals(bdf)  # True, CRS included
 
+from pathlib import Path
+
+Path("sixty5.glb").write_bytes(bimpolars.element_meshes_glb(bdf))  # glTF, one material per style
+
 import geopandas
 
 geopandas.read_parquet("sixty5.parquet", columns=["id", "class", "footprint"]).crs
@@ -81,6 +85,11 @@ extra `[geobim]`; Speckle (specklepy) will come as the extra `[speckle]`.
   Polygon or MultiPolygon, the union of its triangles projected to XY, for a mesh outside a
   frame. Slivers (triangles with less plan area than 1e-9 of the extent squared) are left
   out.
+- `element_meshes_glb(bdf, *, normals=True)`: the meshes as binary glTF (`bytes`), in metres,
+  one primitive and material per style (`name` and `rgba` of the mesh's `styles`), without
+  the `IfcOpeningElement` rows. See [glTF](#gltf).
+- `triangles_glb(groups)`: any triangles in metres, z up, as flat-shaded binary glTF: per
+  material name an `(n, 3, 3)` array of corners and an RGB or RGBA colour in 0..1.
 - `BimDataFrame(frame, crs)`: the thin wrapper with `.frame`, `.crs`, `.with_frame()`,
   `.equals()`, `.write_parquet()` and `BimDataFrame.read_parquet()`.
 - `read_parquet(source)`: reads a `BimDataFrame` back, CRS included. The CRS sits under the
@@ -179,6 +188,37 @@ SELECT id, ST_Area(footprint) FROM read_parquet('sixty5.parquet') WHERE bbox.xma
 ```
 
 `mesh` and `native_geom` are not GeoParquet geometries; they share the model CRS implicitly.
+
+## glTF
+
+`element_meshes_glb` writes the meshes as [binary glTF 2.0](https://registry.khronos.org/glTF/)
+(`.glb`), the format CesiumJS, three.js, Blender and most 3D viewers load:
+
+```python
+from pathlib import Path
+
+frame = bdf.with_frame(bdf.frame.filter(pl.col("class").is_in(["IfcColumn", "IfcBeam"])))
+Path("frame.glb").write_bytes(bimpolars.element_meshes_glb(frame))
+```
+
+- One primitive and one material per style: the faces of every mesh are grouped by the
+  `(name, rgba)` of their style, so a viewer colours the model as its authoring tool did
+  (translucent styles get `alphaMode` BLEND). `IfcOpeningElement` rows are left out: their
+  mesh is the void they cut.
+- Metres, from the model's unit (`linear_unit(bdf.crs)`), as glTF requires.
+- The vertex data keeps the model's z-up coordinates; the root node, named after the CRS and
+  carrying it as `extras.crs`, rotates the scene to glTF's y-up (`bimpolars.gltf.Y_UP_ROTATION`,
+  the 3D Tiles convention: model `(x, y, z)` is scene `(x, z, -y)`). A child node at the centre
+  of the model's bounding box holds the mesh, so that the float32 vertices stay precise for a
+  model far from the origin. In CesiumJS, place the model with
+  `Model.fromGltfAsync({url, modelMatrix, forwardAxis: Cesium.Axis.X})` (the default up axis)
+  and the matrix of `linearized_site_to_ecef`.
+- `normals=True` (the default) writes flat-shaded triangles: every triangle gets its own
+  three vertices with the face normal, because the meshes share vertices between faces of
+  different orientation. `normals=False` writes the vertices and faces as the `mesh` column
+  holds them, indexed and about a quarter of the size, without normals: a glTF reader then
+  computes flat normals (the specification requires it), though CesiumJS renders such a model
+  unlit and three.js smooths it.
 
 ## Develop
 
