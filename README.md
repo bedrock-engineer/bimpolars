@@ -4,9 +4,10 @@ Building Information Models in polars DataFrames with geometry columns.
 
 A `BimDataFrame` is one BIM model: a [polars](https://pola.rs) DataFrame with one row per
 element, with or without geometry, and one model coordinate reference system stored as
-[PROJJSON](https://proj.org/en/stable/specifications/projjson.html). Meshes, bounding boxes and,
-later, footprints are plain nested columns, so the whole model filters, joins and aggregates
-like any other DataFrame and round-trips through Parquet.
+[PROJJSON](https://proj.org/en/stable/specifications/projjson.html). Meshes and bounding boxes
+are plain nested columns and footprints are WKB, so the whole model filters, joins and
+aggregates like any other DataFrame and round-trips through Parquet, as GeoParquet once it has
+footprints.
 
 ```python
 import polars as pl
@@ -25,8 +26,14 @@ columns.select(
     triangles=pl.col("mesh").struct.field("faces").list.len() // 3,
 )
 
-bdf.write_parquet("sixty5.parquet")
+bdf = bimpolars.simple_features(bdf)  # adds footprint_ref: String, footprint: Binary (WKB)
+bdf.write_parquet("sixty5.parquet")  # GeoParquet: footprint is the primary geometry
 bimpolars.read_parquet("sixty5.parquet").equals(bdf)  # True, CRS included
+
+import geopandas
+
+geopandas.read_parquet("sixty5.parquet", columns=["id", "class", "footprint"]).crs
+# <Engineering CRS: {"$schema": ...}>  Name: MM16169 model coordinates, millimetre axes
 ```
 
 ## Install
@@ -35,8 +42,8 @@ bimpolars.read_parquet("sixty5.parquet").equals(bdf)  # True, CRS included
 uv add bimpolars  # or: pip install bimpolars
 ```
 
-The core depends on polars, numpy and ifcopenshell. Georeferencing (pyproj) and Speckle
-(specklepy) will come as the extras `[geobim]` and `[speckle]`.
+The core depends on polars, numpy, shapely and ifcopenshell. Georeferencing (pyproj) and
+Speckle (specklepy) will come as the extras `[geobim]` and `[speckle]`.
 
 ## Functions
 
@@ -53,6 +60,17 @@ The core depends on polars, numpy and ifcopenshell. Georeferencing (pyproj) and 
   - `native_geom`: null for now; `mesh`: `{vertices, faces, styles}` with flat vertices, faces
     sorted by style, and each style's `name`, `rgba` and `face_count`; `bbox`:
     `{xmin, ymin, zmin, xmax, ymax, zmax}`. Rows without geometry have a null `mesh` and `bbox`.
+- `simple_features(bdf)`: adds the plan footprint of every row with a mesh, in two columns:
+  - `footprint`: the outline of the mesh in plan, the union of its triangles projected to the
+    XY plane, as `POLYGON Z` or `MULTIPOLYGON Z` in ISO WKB (`Binary`), lying flat at the
+    level of the `footprint_ref` row. Holes and separate parts survive. A mesh with no plan
+    area (all triangles vertical) gets `POLYGON Z EMPTY`; a row without a mesh gets null.
+    Every mesh is outlined, an `IfcOpeningElement`'s void included: filter openings out first
+    for a plan of the elements.
+  - `footprint_ref`: the `id` of the row whose level the footprint lies at: the row's
+    `container` when that has an `elevation` (the storey, for most elements), else the row
+    itself at the lowest z of its mesh.
+  Decode the column with `shapely.from_wkb(bdf.frame["footprint"].to_numpy())`.
 - `BimDataFrame(frame, crs)`: the thin wrapper with `.frame`, `.crs`, `.with_frame()`,
   `.equals()`, `.write_parquet()` and `BimDataFrame.read_parquet()`.
 - `read_parquet(source)`: reads a `BimDataFrame` back, CRS included. The CRS sits under the
@@ -65,6 +83,27 @@ The core depends on polars, numpy and ifcopenshell. Georeferencing (pyproj) and 
 - `bimpolars.data.fetch(key, *, download=True)`: the path of a test or example model, downloaded
   from `http://r2.eu.bedrock.engineer/bimpolars/` on first use into `bimpolars.data.data_dir()`:
   `BIMPOLARS_DATA_DIR`, else `$XDG_CACHE_HOME/bimpolars`, else `~/.cache/bimpolars`.
+
+## GeoParquet
+
+`write_parquet` on a frame with a `footprint` column writes
+[GeoParquet 1.1](https://geoparquet.org): the file metadata gets a `geo` entry
+(`bimpolars.geoparquet.geo_metadata`) with `footprint` as the primary geometry column, WKB
+encoded, its geometry types, the model CRS as PROJJSON and, when the frame has its `bbox`
+column, that column as the `covering` of the footprints (its `xmin`, `ymin`, `xmax` and `ymax`
+fields; `zmin` and `zmax` describe the mesh). Readers that understand GeoParquet then find the
+footprints with their CRS, and can skip row groups with the bbox:
+
+```python
+geopandas.read_parquet("sixty5.parquet", columns=["id", "footprint"], bbox=(0, 0, 10_000, 10_000))
+```
+
+```sql
+LOAD spatial;  -- DuckDB
+SELECT id, ST_Area(footprint) FROM read_parquet('sixty5.parquet') WHERE bbox.xmax < 10000;
+```
+
+`mesh` and `native_geom` are not GeoParquet geometries; they share the model CRS implicitly.
 
 ## Develop
 
