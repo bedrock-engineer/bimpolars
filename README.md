@@ -98,10 +98,15 @@ Speckle (specklepy) will come as the extras `[geobim]` and `[speckle]`.
 `write_parquet` on a frame with a `footprint` column writes
 [GeoParquet 1.1](https://geoparquet.org): the file metadata gets a `geo` entry
 (`bimpolars.geoparquet.geo_metadata`) with `footprint` as the primary geometry column, WKB
-encoded, its geometry types, the model CRS as PROJJSON and, when the frame has its `bbox`
-column, that column as the `covering` of the footprints (its `xmin`, `ymin`, `xmax` and `ymax`
-fields; `zmin` and `zmax` describe the mesh). Readers that understand GeoParquet then find the
-footprints with their CRS, and can skip row groups with the bbox:
+encoded, its geometry types and the model CRS as PROJJSON. When the frame has its `bbox`
+column, the entry also names that column as the *covering* of the footprints: a pointer that
+tells a reader that each row's footprint lies within `bbox.xmin..xmax` and `bbox.ymin..ymax`,
+so that a spatial filter can skip row groups. A GeoParquet covering has those four slots and
+no z; the `bbox` column itself keeps all six fields. The entry's own bounding box, one for the
+whole file, is x and y only for another reason: the footprints lie flat at their storey's
+elevation, which is often outside the mesh's `zmin..zmax`, so the mesh's z range would not
+contain them. Readers that understand GeoParquet then find the footprints with their CRS, and
+can skip row groups with the bbox:
 
 ```python
 geopandas.read_parquet("sixty5.parquet", columns=["id", "footprint"], bbox=(0, 0, 10_000, 10_000))

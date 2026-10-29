@@ -3,9 +3,13 @@
 A Parquet file is `GeoParquet <https://geoparquet.org>`_ when its file metadata has a ``geo``
 key that names the geometry columns, their encoding and their CRS. :func:`geo_metadata` builds
 that entry for a frame with a WKB geometry column from :data:`GEOMETRY_COLUMNS`, with the
-model CRS as PROJJSON and the ``bbox`` column as the covering of the primary geometry, so that
-DuckDB spatial, geopandas and GDAL read the frame with its CRS. The ``mesh`` and
-``native_geom`` columns share the model CRS implicitly: they are not GeoParquet geometries.
+model CRS as PROJJSON, so that DuckDB spatial, geopandas and GDAL read the frame with its CRS.
+When the frame has its ``bbox`` column, the entry also names it as the *covering* of the
+primary geometry: a pointer that tells a reader that each row's geometry lies within
+``bbox.xmin..xmax`` and ``bbox.ymin..ymax``, so that a spatial filter can skip row groups. A
+GeoParquet covering has those four slots and no z; the column itself keeps all six fields.
+The ``mesh`` and ``native_geom`` columns share the model CRS implicitly: they are not
+GeoParquet geometries.
 """
 
 from __future__ import annotations
@@ -25,7 +29,8 @@ GEOMETRY_COLUMNS: tuple[str, ...] = ("footprint",)
 """The WKB geometry columns a BimDataFrame can hold; the first one present is the primary."""
 
 BBOX_COLUMN = "bbox"
-"""The column that covers the primary geometry: a Struct with xmin, ymin, xmax and ymax."""
+"""The column named as the covering of the primary geometry, when it is a Struct with the
+float fields xmin, ymin, xmax and ymax (zmin and zmax may sit there too: a covering has no z)."""
 
 _BBOX_FIELDS = ("xmin", "ymin", "xmax", "ymax")
 
@@ -47,8 +52,12 @@ def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any]) -> dict[str, Any] 
     """Builds the GeoParquet ``geo`` metadata of a frame.
 
     Every column of :data:`GEOMETRY_COLUMNS` the frame has is listed with ``encoding`` WKB,
-    the geometry types found in its values, the model CRS as PROJJSON and, when the frame has a
-    :data:`BBOX_COLUMN` Struct, the file's bounding box and that column as ``covering``.
+    the geometry types found in its values and the model CRS as PROJJSON. When the frame has a
+    :data:`BBOX_COLUMN` Struct, each column also gets that column as its ``covering`` (the x
+    and y fields: a GeoParquet covering has no z slot) and a ``bbox`` of the whole file. That
+    file ``bbox`` is x and y only as well, on purpose: a footprint lies flat at its storey's
+    elevation, which is often outside the mesh's ``zmin..zmax`` that the column holds, so the
+    mesh's z range would not contain it.
 
     Args:
         frame: The frame about to be written.
