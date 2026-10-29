@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 import polars as pl
 import shapely
+import shapely.errors
 
 from bimpolars.frame import BimDataFrame
 
@@ -128,7 +129,9 @@ def plan_outline(vertices: np.ndarray, faces: np.ndarray) -> shapely.Geometry:
     extent is a sliver, a face that is vertical up to rounding, and is left out. The outline
     never leaves the mesh's bounding box in plan, so the ``bbox`` column covers it: when
     GEOS's robustness fallback rounds a vertex of the union a step outwards, the outline is
-    clamped back to the box.
+    clamped back to the box. When GEOS's floating-point overlay fails altogether on a mesh
+    (it can, on many nearly coincident triangles), the union is redone on a grid of
+    :data:`_SLIVER` times the extent, which is the fixed-precision overlay that cannot fail.
 
     Args:
         vertices: The mesh's vertices, shape ``(n, 3)``.
@@ -145,10 +148,18 @@ def plan_outline(vertices: np.ndarray, faces: np.ndarray) -> shapely.Geometry:
     edge_1 = triangles[:, 1] - triangles[:, 0]
     edge_2 = triangles[:, 2] - triangles[:, 0]
     doubled_area = np.abs(edge_1[:, 0] * edge_2[:, 1] - edge_1[:, 1] * edge_2[:, 0])
-    flat = triangles[doubled_area > _SLIVER * float((high - low).max()) ** 2]
+    extent = float((high - low).max())
+    flat = triangles[doubled_area > _SLIVER * extent**2]
     if len(flat) == 0:
         return shapely.Polygon()
-    outline = shapely.union_all(shapely.polygons(flat))
+    polygons = shapely.polygons(flat)
+    try:
+        outline = shapely.union_all(polygons)
+    except shapely.errors.GEOSException:
+        # GEOS's floating-point overlay can fail on a mesh of many nearly coincident
+        # triangles (a Speckle stair with 1376 faces does it); its fixed-precision overlay
+        # does not, so the union is retried on a grid as fine as the sliver rule
+        outline = shapely.union_all(polygons, grid_size=_SLIVER * extent)
     if outline.geom_type == "GeometryCollection":
         # A union of areas gives areas; drop anything else GEOS might leave in a collection
         parts = shapely.get_parts(outline)

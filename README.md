@@ -51,7 +51,9 @@ uv add "bimpolars[geobim]"  # with pyproj, for georeferencing
 ```
 
 The core depends on polars, numpy, shapely and ifcopenshell. Georeferencing (pyproj) is the
-extra `[geobim]`; Speckle (specklepy) will come as the extra `[speckle]`.
+extra `[geobim]`. Reading a Speckle version from its v3 objects needs no specklepy (see
+[Speckle](#speckle)); receiving from a server and projecting bundles with specklepy will come
+as the extra `[speckle]`.
 
 ## Functions
 
@@ -97,11 +99,20 @@ extra `[geobim]`; Speckle (specklepy) will come as the extra `[speckle]`.
 - `engineering_crs(name, *, unit, datum)`: a plain EngineeringCRS as PROJJSON in a given
   length unit (a known name or a `LinearUnit(name, conversion_factor)`), which a model without
   georeferencing gets. `linear_unit(crs)` reads the unit back.
-- `properties_series(rows)`: the Struct column of property sets that `read_ifc` uses, with the
-  dtype per property inferred across rows, for any reader with named sets of values.
+- `properties_series(rows)`: the Struct column of property sets that `read_ifc` and
+  `read_speckle` use, with the dtype per property inferred across rows, for any reader with
+  named sets of values.
+- `read_speckle(objects, bundle=None, *, name=None)`: reads the v3 objects of a Speckle version
+  into a `BimDataFrame`, instances expanded, with the Revit categories, parameters and levels
+  of the version's bundle when one is given. See [Speckle](#speckle).
+- `version_objects(source, version)`: the v3 objects of one version, root first, from a local
+  copy: a Parquet file with `version_id`, `object_id`, `is_root` and `content` columns, or a
+  SQLite database with `versions(version_id, v3_root_id)` and `objects(hash, content)`.
 - `bimpolars.data.fetch(key, *, download=True)`: the path of a test or example model, downloaded
   from `http://r2.eu.bedrock.engineer/bimpolars/` on first use into `bimpolars.data.data_dir()`:
   `BIMPOLARS_DATA_DIR`, else `$XDG_CACHE_HOME/bimpolars`, else `~/.cache/bimpolars`.
+  `bimpolars.data.fetch_bundle(prefix)` fetches the tables of a Speckle bundle the same way and
+  gives their folder.
 
 ## Georeferencing
 
@@ -221,6 +232,68 @@ Path("structure.glb").write_bytes(bimpolars.element_meshes_glb(structure))
   holds them, indexed and about a quarter of the size, without normals: a glTF reader then
   computes flat normals (the specification requires it), though CesiumJS renders such a model
   unlit and three.js smooths it.
+
+## Speckle
+
+`read_speckle` reads a [Speckle](https://speckle.systems) version without specklepy, from the
+version's v3 objects: the JSON graph of a root collection, `DataObject`s with their
+`displayValue` meshes, and instances (`InstanceProxy`, `InstanceDefinitionProxy`). The objects
+come from a local copy of a Speckle download; `bimpolars.bundle` (coming, the `[speckle]`
+extra) will receive them and project a bundle to them with specklepy.
+
+```python
+import polars as pl
+import bimpolars
+from bimpolars import data
+
+arch = data.RVT_SPECKLE_ARCH  # the Revit Advanced Sample, architecture
+objects = bimpolars.version_objects(data.fetch(data.RVT_SPECKLE_V3_OBJECTS), arch.version_id)
+bdf = bimpolars.read_speckle(objects, data.fetch_bundle(arch.bundle))
+bdf.frame.filter(pl.col("class") == "Walls").select(
+    "id",
+    "name",
+    "container",  # the level: a row with class "Levels" and the elevation
+    family=pl.col("properties").struct.field("object").struct.field("family"),
+    volume=pl.col("properties")
+    .struct.field("properties.Parameters.Instance Parameters.Dimensions")
+    .struct.field("Volume"),
+)
+```
+
+- One row per element: the objects under the root's `elements`, collections traversed, the
+  objects that belong to an instance definition left out. An `InstanceProxy` is expanded in
+  place: its definition's meshes (nested instances included), moved by its transform and
+  scaled from their `units` to the model's. A placement named `<applicationId>-instance-N`
+  folds into the row of `<applicationId>`, so an element placed several times is one row with
+  one merged mesh. `id` is the `applicationId` (the Revit UniqueId), `name` the object's name.
+- `class`: the object's `category`, else the Revit category the bundle has for it, else the
+  `speckle_type`. The bundle is where the instances get theirs: specklepy's projection gives an
+  `InstanceProxy` nothing but its transform.
+- `properties`: a Struct of sets, each a group of the property tree named by its dotted path:
+  `properties` holds the values directly in the object's property bag (`elementId`, `typeId`),
+  `properties.Parameters.Instance Parameters.Dimensions` a group's values (`Volume`), and
+  `object` the object's own fields (`family`, `type`). The path is the bundle's eav `path`
+  column, so a value is found at `f"{set}.{name}"`. The bundle's values (type parameters
+  included, instance values winning) fill the rows the objects leave bare.
+- With a bundle, the levels (the envelope's level nodes) become rows of class `Levels` with
+  their `elevation` and the id `level-<node id>`, and every element's `container` points at
+  its level, so `simple_features` places the footprints at the level. Without one, `container`
+  and `elevation` are null.
+- `mesh` and `bbox` in the model's units; quads and n-gons are fan-triangulated. A style is the
+  `RenderMaterial` the root's `renderMaterialProxies` give the mesh, its element or its
+  instance (the first proxy that targets one of them, when several do); a definition's mesh
+  without one gets, with a bundle, the material the envelope attaches to the bundle geometry
+  it came from (`def-geo-<geometry index>`).
+- The CRS is a plain engineering CRS in the root's `units` (the bundle's when the root has
+  none), anchored at Revit's project base point: the model's own coordinates. The geolocation
+  of a Revit model is never used (the MEP sample sits at Revit's Munich default). Revit exports
+  IFC in shared coordinates, so to compare with `read_ifc`, move the Speckle model by the
+  bundle's `modelPlacement.options.sharedCoordinates.transform`; on the RVT Advanced Sample
+  the plan extents then agree to the micrometre and 85 % of the elements matched by IfcGUID
+  within 1 mm.
+- An element placed with an empty definition has no mesh: specklepy's projection drops the
+  geometry such an element carries itself (841 of the 935 elements of the structural sample);
+  `bundle_objects` (bimpolars#10) will put it back.
 
 ## Develop
 

@@ -9,6 +9,10 @@ Parquet GeoParquet. `src/bimpolars/geobim.py` (the `[geobim]` extra, pyproj) geo
 model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` and
 `linearized_site_to_ecef`. `src/bimpolars/gltf.py` writes the meshes as binary glTF:
 `element_meshes_glb` (one primitive per style) and `triangles_glb` (any triangles).
+`src/bimpolars/speckle.py` reads a Speckle version from its v3 objects: `version_objects`
+(Parquet or SQLite copy) and `read_speckle` (instances expanded, the bundle's categories,
+parameters and levels joined by applicationId). `src/bimpolars/mesh.py` holds the `Mesh` the
+readers end with and `mesh_frame`, which builds the `mesh` and `bbox` columns from it.
 
 ## Rules
 
@@ -18,9 +22,11 @@ model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` a
   `uv run pytest -m slow`.
 - Typed code with Google-style docstrings (ruff enforces `D` with the google convention).
 - The core imports neither pyproj nor specklepy. pyproj lives in `bimpolars.geobim` behind
-  the extra `[geobim]` (#6); #10 adds the extra `[speckle]` (specklepy) in its own module.
-  `tests/test_geobim.py::test_the_core_imports_without_pyproj` imports the core in a
-  subprocess with `sys.modules["pyproj"] = None` to keep it that way. CRSs are PROJJSON dicts
+  the extra `[geobim]` (#6); #10 adds the extra `[speckle]` (specklepy) in its own module
+  (`bimpolars.bundle`), while `bimpolars.speckle` (#9) reads v3 objects as plain JSON.
+  `tests/test_geobim.py::test_the_core_imports_without_pyproj` and
+  `tests/test_speckle.py::test_the_core_imports_without_specklepy` import the core in a
+  subprocess with `sys.modules[...] = None` to keep it that way. CRSs are PROJJSON dicts
   (`src/bimpolars/crs.py`) so the core can build and store them without pyproj. shapely is a
   core dependency (the footprints need it).
 - `to_crs` moves `mesh`, the WKB columns of `geobim.WKB_COLUMNS` (`footprint`, `lightbim`
@@ -56,7 +62,24 @@ model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` a
   than silently placing the footprint at the element's own level. `container` is null for
   `IfcDistributionPort` rows (ports hang off their element, not a spatial element).
 - The inference of property dtypes across rows lives in `src/bimpolars/properties.py`
-  (`properties_series`), for `read_speckle` (#9) to reuse.
+  (`properties_series`); `read_ifc` and `read_speckle` both use it.
+- `read_speckle` rows are the objects under the root's `elements` (collections traversed;
+  definition content, which specklepy names `def-geo-<geometry index>` and
+  `nested-inst-<n>`, left out), keyed by `applicationId` with `-instance-N` stripped, so a
+  placement folds into its element's row and the same mesh (listed as a Mesh and as the
+  DataObject that displays it) counts once. `class` = the object's `category`, else the
+  bundle's category, else `speckle_type`. The property set of a value is the dotted path of
+  its group (`properties`, `properties.Parameters.Instance Parameters.Dimensions`, and
+  `object` for the object's own fields), the same for the object's bag and the bundle's eav
+  `path`; an eav row with a number and its text gives the number. Levels become rows
+  (`level-<node id>`, class `Levels`, `elevation` in model units) and `container` points at
+  them, so `simple_features` works on the result. Styles: the root's `renderMaterialProxies`
+  (first proxy that targets the mesh, the element or the instance wins), then the envelope's
+  `HAS_MATERIAL` for definition geometry. The CRS is the root's `units`, never the Revit
+  geolocation. No specklepy: the SGEO geometry of a bundle is not decoded here (#10).
+- `plan_outline` retries a union that GEOS's floating-point overlay fails on (one MEP stair
+  mesh of 1376 faces does) with `grid_size` = the sliver fraction times the extent, which is
+  the fixed-precision overlay that cannot fail.
 - Simple-feature columns (`footprint`, later `geog` and the LightBIM geometry) are ISO WKB with
   Z in a `Binary` column, so that GeoParquet readers (DuckDB spatial, geopandas, GDAL) take them
   as they are; shapely decodes them. Meshes stay nested columns. A geometry column that is
@@ -124,7 +147,22 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   The sliver rule of `plan_outline` (triangles under 1e-9 of the extent squared are left
   out) decides 25 of these: without it GEOS's robustness fallback leaves hairline gaps in
   24 door and furniture outlines, and the Jordahl console's two parts become one Polygon.
-- `rvt-advanced-sample-arch.ifc`: 5696 elements, 5 storeys.
-- `rvt-advanced-sample/speckle-v3-objects.parquet` and
-  `rvt-advanced-sample/speckle-bundle/<model id>/<version id>/*.parquet`: Speckle data for
-  `read_speckle` (#9, not written yet).
+- `rvt-advanced-sample-arch.ifc`: 5696 elements, 5 storeys; 5734 rows (30 ports with a null
+  `container`, 8 spatial), extent x -107,474..211,591, y -53,399..98,364, z -1829..12,485 mm
+  in shared coordinates (the survey point), 49 s to read.
+- `rvt-advanced-sample/speckle-v3-objects.parquet` (`data.RVT_SPECKLE_V3_OBJECTS`: arch
+  12,915 objects, str 2291, mep 16,139; each version's root first, all `projected` from the
+  bundles with specklepy 2026.9.1) and the bundles
+  `rvt-advanced-sample/speckle-bundle/<model id>/<version id>/<name>.<table>.parquet`
+  (`data.RVT_SPECKLE_ARCH/STR/MEP`, 18 tables each, `data.fetch_bundle`). `read_speckle` with
+  the bundle, all in mm at the project base point: arch 5766 rows = 5761 elements (321 with
+  geometry of their own, 5440 instances, all 5440 with a category; 18 elements have several
+  placements, a stair 22) + 5 levels (0, 3800, 7600, 11,400, 12,000), 5501 meshes, 372,804
+  vertices, 251,301 faces, 41 styles (174,063 faces styled), 96 property sets with 633 fields
+  (7.8 MB), 1.6 s; the IFC export sits 9201.999 mm east and 22,635.061 mm north of it, and
+  after that shift the plan extents agree to the micrometre (z max differs 89 mm: a roof
+  without IFC geometry) and of 5347 elements matched by IfcGUID 85 % agree within 1 mm, 97 %
+  within 10 mm, the worst wall by 430 mm. str: 922 rows (918 + 4 levels), only 77 meshes
+  (841 instances of empty definitions, #10), 34,882 faces, 4 styles. mep: 7298 rows (7294 +
+  4 levels), 6932 meshes, 419,305 faces, 86 sets with 1016 fields (12.4 MB), 3.8 s;
+  `simple_features` 6 s.
