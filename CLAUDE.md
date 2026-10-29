@@ -60,7 +60,10 @@ model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` a
   Z in a `Binary` column, so that GeoParquet readers (DuckDB spatial, geopandas, GDAL) take them
   as they are; shapely decodes them. Meshes stay nested columns. A geometry column that is
   listed in `geoparquet.GEOMETRY_COLUMNS` gets `geo` metadata on write, the first present one
-  as the primary; `bbox` is the covering (x and y only: its z range is the mesh's).
+  as the primary. `bbox` is its covering: the `geo` entry points readers at the column's x and
+  y fields, which every footprint lies within, so that a spatial filter can skip row groups. A
+  GeoParquet covering has no z slot, and the column's `zmin..zmax` is the mesh's, which a
+  footprint flat at its storey's elevation often lies outside of; the column keeps all six.
 - A row's `footprint` is null exactly when its `mesh` is null; a mesh without plan area gets
   `POLYGON Z EMPTY`. The footprint's bounds stay inside the row's `bbox`.
 - Keep the README's function list current when a public function is added.

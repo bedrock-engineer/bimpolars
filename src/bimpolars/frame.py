@@ -151,8 +151,9 @@ class BimDataFrame:
         A frame with a ``footprint`` column (see :func:`bimpolars.simple_features`) is written
         as GeoParquet: the file metadata also gets the ``geo`` entry of
         :func:`bimpolars.geoparquet.geo_metadata`, with ``footprint`` as the primary geometry
-        in the model CRS and ``bbox`` as its covering, so that GeoParquet readers find the
-        footprints with their CRS.
+        in the model CRS and ``bbox`` named as its covering (the x and y fields each footprint
+        lies within), so that GeoParquet readers find the footprints with their CRS and skip
+        row groups for a spatial filter.
 
         Args:
             file: Where to write: a path or a binary file object.
