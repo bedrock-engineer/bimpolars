@@ -24,12 +24,14 @@ model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` a
   core dependency (the footprints need it).
 - `to_crs` moves `mesh`, the WKB columns of `geobim.WKB_COLUMNS` (`footprint`, `lightbim`
   once #11 adds it; never `geog`, which is always OGC:CRS84h) and `elevation` (as a point at
-  the plan centre of the model), recomputes `bbox` from the moved meshes, and keeps the
-  footprints inside their `bbox`. It nulls `native_geom` when the transformation is not
-  affine over the model (`affine_transformation` gives the 4x4 matrix when it is; #11 uses it
-  to place its sweeps and replaces the `NotImplementedError` for a filled column). Targets
-  must have three axes (`EPSG:7415`, never `EPSG:28992`): the model's unit becomes the
-  target's, and a model stays in one unit per axis.
+  the plan centre of the model), recomputes `bbox` from the moved meshes (from the eight
+  moved corners of the old `bbox` when the frame has no `mesh` column), and keeps the
+  footprints inside their `bbox` with `geobim._clamp_xy`, which clips x and y and keeps z
+  (`shapely.transform` drops z unless `include_z=True`). It nulls `native_geom` when the
+  transformation is not affine over the model (`affine_transformation` gives the 4x4 matrix
+  when it is; #11 uses it to place its sweeps and replaces the `NotImplementedError` for a
+  filled column). Targets must have three axes (`EPSG:7415`, never `EPSG:28992`): the model's
+  unit becomes the target's, and a model stays in one unit per axis.
 - PROJ applies the deriving conversion of a DerivedVerticalCRS after the geodetic step of the
   horizontal part, so a 3D Helmert transformation (the fallback without grids) reads a
   millimetre site's heights as metres: 0.7 m of horizontal error at 50 m height, and an ECEF
@@ -38,8 +40,10 @@ model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` a
 - Without the NSGI grids (`nl_nsgi_rdtrans2018.tif`, `nl_nsgi_nlgeo2018.tif`; cdn.proj.org is
   blocked from the cloud containers, and the PROJ network is off) PROJ falls back to a Helmert
   transformation that is good to about a metre and a ballpark vertical step that passes NAP
-  heights off as ellipsoidal heights. A test of a transformation to ETRS89 must state that
-  tolerance or check the operation PROJ picked (`Transformer.description`).
+  heights off as ellipsoidal heights. `geobim._transformer` warns (a `UserWarning` pointing
+  at the caller) when `TransformerGroup(...).best_available` is False; the `description` of
+  a lazy `Transformer` does not say which operation runs. A test of a transformation to
+  ETRS89 must state that tolerance or check the group.
 - Geometry stays in the model's own coordinates and length unit (millimetres for most IFCs);
   the CRS carries the unit. Never convert to metres silently.
 - Rows are every `IfcProduct`. On the structural model 1,284 of the 2,647 element rows are

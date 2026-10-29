@@ -7,6 +7,7 @@ import json
 import math
 import subprocess
 import sys
+import warnings
 from typing import Any, NamedTuple
 
 import ifcopenshell
@@ -28,7 +29,7 @@ from bimpolars.geobim import (  # noqa: E402
     set_crs,
     to_crs,
 )
-from bimpolars.geoparquet import GEO_METADATA_KEY  # noqa: E402
+from bimpolars.geoparquet import GEO_METADATA_KEY, geo_metadata  # noqa: E402
 from tests.synthetic import SPATIAL, box, model  # noqa: E402
 
 
@@ -119,6 +120,28 @@ def footprints(bdf: BimDataFrame) -> np.ndarray:
     return shapely.from_wkb(bdf.frame["footprint"].to_numpy())
 
 
+COLUMN_FOOTPRINT = shapely.Polygon(
+    [(10, 20, 3000), (510, 20, 3000), (510, 820, 3000), (10, 820, 3000)]
+)
+
+
+def plain_column_model() -> BimDataFrame:
+    """A 500 x 800 x 2800 mm column on the storey of SPATIAL, in a plain EngineeringCRS."""
+    column = {"id": "column", "class": "IfcColumn", "container": "storey"}
+    column["mesh"] = box(10, 20, 3200, 510, 820, 6000)
+    return model([*SPATIAL, column])
+
+
+def column_model(footprint: shapely.Polygon | None = None) -> BimDataFrame:
+    """The column model georeferenced as Sixty5, with the column's footprint when given."""
+    bdf = set_crs(plain_column_model(), SIXTY5.crs())
+    if footprint is None:
+        return bdf
+    wkb = shapely.to_wkb(footprint, flavor="iso")
+    column = pl.Series("footprint", [None, None, None, wkb], dtype=pl.Binary)
+    return bdf.with_frame(bdf.frame.with_columns(column))
+
+
 def test_derived_engineering_crs_is_a_compound_of_two_derived_crss() -> None:
     crs = SIXTY5.crs()
     assert crs["type"] == "CompoundCRS"
@@ -174,9 +197,7 @@ def test_derived_engineering_crs_checks_its_arguments() -> None:
 
 
 def test_set_crs_labels_without_moving() -> None:
-    column = {"id": "column", "class": "IfcColumn", "container": "storey"}
-    column["mesh"] = box(10, 20, 3200, 510, 820, 6000)
-    bdf = model([*SPATIAL, column])
+    bdf = plain_column_model()
     labelled = set_crs(bdf, SIXTY5.crs())
     assert labelled.frame is bdf.frame
     assert labelled.crs == SIXTY5.crs()
@@ -192,27 +213,7 @@ def test_set_crs_labels_without_moving() -> None:
 
 
 def test_to_crs_moves_the_geometry_columns_together() -> None:
-    column = {"id": "column", "class": "IfcColumn", "container": "storey"}
-    column["mesh"] = box(10, 20, 3200, 510, 820, 6000)
-    bdf = set_crs(model([*SPATIAL, column]), SIXTY5.crs())
-    bdf = bdf.with_frame(
-        bdf.frame.with_columns(
-            footprint=pl.Series(
-                [
-                    None,
-                    None,
-                    None,
-                    shapely.to_wkb(
-                        shapely.Polygon(
-                            [(10, 20, 3000), (510, 20, 3000), (510, 820, 3000), (10, 820, 3000)]
-                        ),
-                        flavor="iso",
-                    ),
-                ],
-                dtype=pl.Binary,
-            )
-        )
-    )
+    bdf = column_model(COLUMN_FOOTPRINT)
     moved = to_crs(bdf, "EPSG:7415")
     frame = moved.frame
 
@@ -248,6 +249,120 @@ def test_to_crs_moves_the_geometry_columns_together() -> None:
     z = shapely.get_coordinates(footprint, include_z=True)[:, 2]
     assert np.abs(z - (18.625 + 3.0)).max() < 1e-9
     assert frame["elevation"].to_list() == [None, None, pytest.approx(18.625 + 3.0), None]
+
+
+def inside_bbox(footprint: shapely.Geometry, bbox: dict[str, float]) -> bool:
+    xmin, ymin, xmax, ymax = footprint.bounds
+    return (
+        bbox["xmin"] <= xmin
+        and bbox["ymin"] <= ymin
+        and xmax <= bbox["xmax"]
+        and ymax <= bbox["ymax"]
+    )
+
+
+def test_to_crs_moves_bbox_from_its_corners_without_a_mesh() -> None:
+    """A frame with the mesh column selected away keeps a bbox: the box around the moved
+    corners of the old one, which the footprint stays inside."""
+    bdf = column_model(COLUMN_FOOTPRINT)
+    bdf = bdf.with_frame(bdf.frame.drop("mesh"))
+    moved = to_crs(bdf, "EPSG:7415")
+    frame = moved.frame
+    assert frame.columns == bdf.frame.columns
+    assert frame.schema["bbox"] == BBOX_DTYPE
+    assert frame["bbox"].null_count() == 3
+
+    old = bdf.frame["bbox"][3]
+    corners = np.array(
+        [
+            [x, y, z]
+            for x in (old["xmin"], old["xmax"])
+            for y in (old["ymin"], old["ymax"])
+            for z in (old["zmin"], old["zmax"])
+        ]
+    )
+    expected = SIXTY5.to_rd(corners)
+    bbox = frame["bbox"][3]
+    assert [bbox[k] for k in ("xmin", "ymin", "zmin")] == pytest.approx(
+        expected.min(axis=0), abs=1e-6
+    )
+    assert [bbox[k] for k in ("xmax", "ymax", "zmax")] == pytest.approx(
+        expected.max(axis=0), abs=1e-6
+    )
+    # The corners of a box are its vertices, so this is the bbox the mesh would have given
+    with_mesh = to_crs(column_model(COLUMN_FOOTPRINT), "EPSG:7415").frame["bbox"][3]
+    assert [bbox[k] for k in bbox] == pytest.approx([with_mesh[k] for k in with_mesh], abs=1e-9)
+    footprint = footprints(moved)[3]
+    assert footprint.has_z
+    assert footprint.area == pytest.approx(0.5 * 0.8, abs=1e-6)
+    assert inside_bbox(footprint, bbox)
+
+    # Without a bbox either, the footprint moves as it is
+    bare = to_crs(bdf.with_frame(bdf.frame.drop("bbox")), "EPSG:7415")
+    assert bare.frame.columns == [c for c in bdf.frame.columns if c != "bbox"]
+    assert footprints(bare)[3].equals_exact(footprint, 1e-9)
+
+
+def test_clamping_a_footprint_to_its_bbox_keeps_z() -> None:
+    """A footprint that spills out of its bbox is pulled in on x and y and keeps its z."""
+    wide = shapely.Polygon(
+        [(-1000, -1000, 3000), (2000, -1000, 3000), (2000, 2000, 3000), (-1000, 2000, 3000)]
+    )
+    moved = to_crs(column_model(wide), "EPSG:7415")
+    footprint = footprints(moved)[3]
+    bbox = moved.frame["bbox"][3]
+    assert footprint.has_z and not footprint.is_empty
+    assert inside_bbox(footprint, bbox)
+    # The wide square covered the box, so a corner of it lands on each side of the bbox
+    assert footprint.bounds == pytest.approx(
+        (bbox["xmin"], bbox["ymin"], bbox["xmax"], bbox["ymax"]), abs=1e-9
+    )
+    z = shapely.get_coordinates(footprint, include_z=True)[:, 2]
+    assert np.abs(z - (18.625 + 3.0)).max() < 1e-9
+
+
+def test_footprints_moved_to_a_geographic_crs_keep_z(
+    sixty5_structural_features: BimDataFrame,
+) -> None:
+    """Every Sixty5 footprint in OGC:CRS84h is a Polygon Z at its storey's moved level, inside
+    its bbox, and the GeoParquet metadata lists Z types only."""
+    geographic = to_crs(set_crs(sixty5_structural_features, SIXTY5.crs()), "OGC:CRS84h")
+    frame = geographic.frame
+    moved = footprints(geographic)
+    has = np.array([f is not None and not f.is_empty for f in moved])
+    assert has.sum() == 2647
+    assert shapely.has_z(moved[has]).all()
+    levels = dict(frame.select("id", "elevation").iter_rows())
+    refs = frame["footprint_ref"].to_numpy()
+    for ref, footprint in zip(refs[has], moved[has], strict=True):
+        z = shapely.get_coordinates(footprint, include_z=True)[:, 2]
+        # The level moves at the plan centre of the model; the footprint at its own place,
+        # where the height differs by what the geoid does over 100 m
+        assert np.abs(z - levels[ref]).max() < 0.01
+    bboxes = [bbox for bbox, present in zip(frame["bbox"], has, strict=True) if present]
+    for footprint, bbox in zip(moved[has], bboxes, strict=True):
+        assert inside_bbox(footprint, bbox)
+    geo = geo_metadata(frame, geographic.crs)
+    assert geo is not None
+    assert sorted(geo["columns"]["footprint"]["geometry_types"]) == ["MultiPolygon Z", "Polygon Z"]
+
+
+def test_to_crs_warns_when_the_best_transformation_needs_missing_grids() -> None:
+    """Without the NSGI grids PROJ falls back to a Helmert transformation; to_crs says so."""
+    bdf = column_model()
+    group = pyproj.transformer.TransformerGroup("EPSG:7415", "OGC:CRS84h", always_xy=True)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        to_crs(bdf, "OGC:CRS84h")
+        to_crs(bdf, "EPSG:7415")  # to the base CRS: an exact conversion, nothing to warn about
+    about_grids = [w for w in caught if "grids" in str(w.message)]
+    if group.best_available:
+        assert not about_grids
+    else:
+        assert len(about_grids) == 1
+        message = str(about_grids[0].message)
+        assert "nl_nsgi_rdtrans2018.tif" in message and "set_network_enabled" in message
+        assert about_grids[0].filename == __file__  # it points at the caller of to_crs
 
 
 def test_to_crs_of_sixty5_puts_the_model_where_the_notebook_does(
@@ -336,9 +451,7 @@ def test_georeferenced_model_writes_geoparquet_in_the_target_crs(
 
 def native_geom_model() -> BimDataFrame:
     """A model with a placeholder native_geom column, as a reader of #11 could fill it."""
-    column = {"id": "column", "class": "IfcColumn", "container": "storey"}
-    column["mesh"] = box(10, 20, 3200, 510, 820, 6000)
-    bdf = set_crs(model([*SPATIAL, column]), SIXTY5.crs())
+    bdf = column_model()
     native = pl.Series(
         "native_geom",
         [None, None, None, {"item": "IfcExtrudedAreaSolid", "depth": 2800.0}],
@@ -388,9 +501,7 @@ def test_an_affine_target_keeps_native_geom() -> None:
 
 
 def test_to_crs_refuses_what_pyproj_cannot_do() -> None:
-    column = {"id": "column", "class": "IfcColumn", "container": "storey"}
-    column["mesh"] = box(0, 0, 0, 1, 1, 1)
-    plain = model([*SPATIAL, column])
+    plain = plain_column_model()
     with pytest.raises(ValueError, match="set_crs"):
         to_crs(plain, "EPSG:7415")
     georeferenced = set_crs(plain, SIXTY5.crs())

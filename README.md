@@ -100,8 +100,10 @@ extra `[geobim]`; Speckle (specklepy) will come as the extra `[speckle]`.
 coordinates; georeferencing says where that is on earth:
 
 ```python
+import bimpolars
 from bimpolars.geobim import derived_engineering_crs, set_crs, to_crs
 
+bdf = bimpolars.simple_features(bimpolars.read_ifc("sixty5.ifc"))
 # Sixty5: the site origin at RD New (160071.5, 384156.5), NAP +18.625 m, the site's y-axis
 # 50.36 degrees clockwise from grid north, in the model's millimetres
 crs = derived_engineering_crs(
@@ -133,8 +135,10 @@ geog = to_crs(site, "OGC:CRS84h")  # longitude, latitude, ellipsoidal height
 - `to_crs(bdf, crs)`: moves the model to another CRS with one pyproj transformation, like
   `GeoDataFrame.to_crs`: the `mesh` vertices, the WKB columns in the model CRS (`footprint`,
   later `lightbim`; never `geog`) and the storey `elevation`s (at the plan centre of the
-  model) move together, and `bbox` is recomputed from the moved meshes. The target must have
-  three axes, so that the meshes keep one unit per axis: `"EPSG:7415"`, not `"EPSG:28992"`.
+  model) move together, `bbox` is recomputed from the moved meshes (from the moved corners of
+  the old `bbox` when the frame has no `mesh` column) and the footprints are kept inside it.
+  The target must have three axes, so that the meshes keep one unit per axis: `"EPSG:7415"`,
+  not `"EPSG:28992"`.
   `native_geom` keeps its placement only under an affine transformation (to the base CRS of
   the Engineering CRS, for instance); a geographic, geocentric or differently projected target
   nulls it. A derived CRS is passed through its base CRS, because PROJ otherwise applies a
@@ -146,8 +150,9 @@ geog = to_crs(site, "OGC:CRS84h")  # longitude, latitude, ellipsoidal height
 
 Transformations to ETRS89 (`EPSG:4937`, `OGC:CRS84h`, ECEF) should follow RDNAPTRANS™2018,
 which PROJ does only with the NSGI grids `nl_nsgi_rdtrans2018.tif` and `nl_nsgi_nlgeo2018.tif`
-(install them, or enable the PROJ network). Without them PROJ silently falls back to a Helmert
-transformation that is good to about a metre, and passes NAP heights off as ellipsoidal heights.
+(install them, or enable the PROJ network). Without them PROJ falls back to a Helmert
+transformation that is good to about a metre, and passes NAP heights off as ellipsoidal heights;
+`to_crs` warns when that happens.
 
 ## GeoParquet
 

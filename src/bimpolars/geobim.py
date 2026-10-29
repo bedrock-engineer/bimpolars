@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import warnings
 from collections.abc import Mapping
 from typing import Any, Protocol
 
@@ -25,22 +27,24 @@ try:
     import pyproj
     import pyproj.exceptions
     from pyproj.crs import CompoundCRS
+    from pyproj.transformer import TransformerGroup
 except ImportError as error:
     raise ImportError(
         "bimpolars.geobim needs pyproj: install the extra bimpolars[geobim]"
     ) from error
 
 from bimpolars.crs import PROJJSON_SCHEMA, LinearUnit, as_linear_unit, linear_unit, unit_projjson
-from bimpolars.features import _clamp
 from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, BimDataFrame
+from bimpolars.geoparquet import GEOMETRY_COLUMNS
 
 CRSLike = Mapping[str, Any] | pyproj.CRS | str | int
 """A CRS as PROJJSON, a ``pyproj.CRS``, or anything ``pyproj.CRS.from_user_input`` reads."""
 
-WKB_COLUMNS: tuple[str, ...] = ("footprint", "lightbim")
+WKB_COLUMNS: tuple[str, ...] = tuple(column for column in GEOMETRY_COLUMNS if column != "geog")
 """The WKB columns in the model CRS that :func:`to_crs` moves, when present.
 
-``geog`` (the footprints in OGC:CRS84h, bimpolars#7) is not one of them: it never changes CRS.
+They are the :data:`bimpolars.geoparquet.GEOMETRY_COLUMNS` without ``geog``, the footprints in
+OGC:CRS84h of bimpolars#7, which never change CRS.
 """
 
 AFFINE_TOLERANCE = 1e-6
@@ -48,6 +52,14 @@ AFFINE_TOLERANCE = 1e-6
 
 _PROBE_HALF_SIZE = 500.0
 """The least half size, in metres, of the cube the affine fit of :func:`to_crs` probes."""
+
+_PROBE_HALF_SIZE_DEGREES = 0.01
+"""The same, in degrees, for a model stored in a geographic CRS: about a kilometre."""
+
+_BBOX_FIELDS = ("xmin", "ymin", "zmin", "xmax", "ymax", "zmax")
+
+_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+"""Warnings of this module point at the caller outside bimpolars."""
 
 
 def derived_engineering_crs(
@@ -91,10 +103,11 @@ def derived_engineering_crs(
         The Engineering CRS as a PROJJSON dict, for :func:`set_crs`.
 
     Raises:
-        ValueError: If ``base_crs`` is not a compound CRS of a projected and a vertical CRS, or
-            ``unit`` is a name :data:`bimpolars.crs.LINEAR_UNITS` does not know.
+        ValueError: If ``base_crs`` is not a compound CRS of a projected and a vertical CRS
+            that PROJ can derive from, or ``unit`` is a name :data:`bimpolars.crs.LINEAR_UNITS`
+            does not know.
     """
-    base = _pyproj_crs(base_crs)
+    base, _ = _resolve(base_crs)
     components = base.sub_crs_list
     if len(components) != 2 or not components[0].is_projected or not components[1].is_vertical:
         raise ValueError(
@@ -112,8 +125,8 @@ def derived_engineering_crs(
     a0 = -(a1 * easting + a2 * northing)
     b0 = -(b1 * easting + b2 * northing)
 
-    def parameter(name: str, value: float, unit: dict[str, Any] | str) -> dict[str, Any]:
-        return {"name": name, "value": float(value), "unit": unit}
+    def parameter(key: str, value: float, unit_json: dict[str, Any] | str) -> dict[str, Any]:
+        return {"name": key, "value": float(value), "unit": unit_json}
 
     site_grid = {
         "type": "DerivedProjectedCRS",
@@ -181,7 +194,10 @@ def derived_engineering_crs(
         "name": f"{name} Engineering CRS",
         "components": [site_grid, site_z],
     }
-    pyproj.CRS.from_json_dict(crs)  # fails early on a base CRS PROJ cannot derive from
+    try:
+        pyproj.CRS.from_json_dict(crs)  # fails early on a base CRS PROJ cannot derive from
+    except pyproj.exceptions.CRSError as error:
+        raise ValueError(f"PROJ cannot build the Engineering CRS: {error}") from error
     return crs
 
 
@@ -214,8 +230,10 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
     geometry columns together: the ``mesh`` vertices, the WKB columns of :data:`WKB_COLUMNS`
     (``footprint``, and ``lightbim`` once bimpolars#11 adds it), and ``elevation``, the level
     of each storey, taken at the plan centre of the model. ``bbox`` is recomputed from the
-    moved meshes. The model's length unit becomes the target's: a model in millimetres moved
-    to EPSG:7415 is in metres.
+    moved meshes; a frame without a ``mesh`` column gets the axis-aligned bounds of the moved
+    corners of each box instead, which still covers the moved geometry (loosely, under a
+    rotation). The model's length unit becomes the target's: a model in millimetres moved to
+    EPSG:7415 is in metres.
 
     ``native_geom``, the sweeps of bimpolars#11 placed in the model CRS, survives only an
     affine transformation (to the base CRS of a :func:`derived_engineering_crs`, for example):
@@ -225,7 +243,10 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
 
     The transformation from or to a derived CRS, such as the compound of
     :func:`derived_engineering_crs`, goes through its base CRS, so that PROJ's geodetic steps
-    see heights in the base CRS's unit (see :func:`_transformer`).
+    see heights in the base CRS's unit (see :func:`_transformer`). When the best
+    transformation PROJ knows needs grids that are not installed (RDNAPTRANS2018 needs the
+    NSGI grids), a ``UserWarning`` names them and PROJ falls back to a less accurate
+    operation.
 
     Args:
         bdf: The model, with a CRS pyproj can transform from: an EngineeringCRS of
@@ -241,13 +262,11 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
         ValueError: If pyproj knows no transformation from the model CRS to ``crs`` (a plain
             EngineeringCRS is not georeferenced: :func:`set_crs` it first), if ``crs`` does
             not have three axes, or if a coordinate does not transform.
+        TypeError: If a column of :data:`WKB_COLUMNS` is not Binary.
         NotImplementedError: If ``native_geom`` holds values and the transformation is affine:
             their placement follows the layout of bimpolars#11.
     """
-    target, projjson = _resolve(crs)
-    _check_3d(target)
-    source = pyproj.CRS.from_json_dict(bdf.crs)
-    transformer = _transformer(source, target)
+    transformer, source, target, projjson = _prepare(bdf, crs)
     frame = bdf.frame
     columns: list[pl.Series] = []
     bbox: pl.Series | None = None
@@ -256,6 +275,9 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
         columns.append(mesh)
         if "bbox" in frame.columns:
             columns.append(bbox)
+    elif "bbox" in frame.columns:
+        bbox = _transform_bboxes(frame["bbox"], transformer)
+        columns.append(bbox)
     if "elevation" in frame.columns:
         columns.append(_transform_elevations(frame, transformer))
     for name in WKB_COLUMNS:
@@ -284,7 +306,8 @@ def affine_transformation(
     The transformation from the model CRS to ``crs`` is probed on the corners of a cube around
     the model (its extent, at least a kilometre across) and fitted by least squares. It is
     affine when no corner strays more than :data:`AFFINE_TOLERANCE` metres from the fit; a
-    geographic or geocentric target never is.
+    geographic or geocentric target never is. The matrix carries the change of unit: from a
+    model in millimetres to EPSG:7415 its linear part has a scale of 0.001.
 
     Args:
         bdf: The model.
@@ -297,10 +320,8 @@ def affine_transformation(
     Raises:
         ValueError: As :func:`to_crs` raises it.
     """
-    target, _ = _resolve(crs)
-    _check_3d(target)
-    source = pyproj.CRS.from_json_dict(bdf.crs)
-    return _affine_matrix(_transformer(source, target), source, target, bdf.frame)
+    transformer, source, target, _ = _prepare(bdf, crs)
+    return _affine_matrix(transformer, source, target, bdf.frame)
 
 
 def linearized_site_to_ecef(crs: CRSLike) -> np.ndarray[Any, np.dtype[np.float64]]:
@@ -335,11 +356,6 @@ def linearized_site_to_ecef(crs: CRSLike) -> np.ndarray[Any, np.dtype[np.float64
     return matrix
 
 
-def _pyproj_crs(crs: CRSLike) -> pyproj.CRS:
-    """Reads a CRS with pyproj."""
-    return _resolve(crs)[0]
-
-
 def _resolve(crs: CRSLike) -> tuple[pyproj.CRS, dict[str, Any]]:
     """Reads a CRS with pyproj and gives its PROJJSON: the caller's own when it passed one."""
     try:
@@ -352,6 +368,20 @@ def _resolve(crs: CRSLike) -> tuple[pyproj.CRS, dict[str, Any]]:
     except pyproj.exceptions.CRSError as error:
         raise ValueError(f"pyproj cannot read the CRS {crs!r}: {error}") from error
     return parsed, parsed.to_json_dict()
+
+
+def _prepare(
+    bdf: BimDataFrame, crs: CRSLike
+) -> tuple[_Transformation, pyproj.CRS, pyproj.CRS, dict[str, Any]]:
+    """Reads the target CRS and builds the transformation from the model CRS to it.
+
+    Returns:
+        The transformation, the model CRS, the target CRS and the target's PROJJSON.
+    """
+    target, projjson = _resolve(crs)
+    _check_3d(target)
+    source = pyproj.CRS.from_json_dict(bdf.crs)
+    return _transformer(source, target), source, target, projjson
 
 
 class _Transformation(Protocol):
@@ -386,6 +416,10 @@ def _transformer(source: pyproj.CRS, target: pyproj.CRS) -> _Transformation:
     CRS: PROJ otherwise orders the deriving conversion of the vertical CRS after a geodetic
     step, so that a 3D Helmert transformation reads a site's millimetres as metres. The
     conversion to the base CRS is exact, so the chain costs nothing.
+
+    Warns:
+        UserWarning: When the best transformation of a step needs grids that are not
+            installed, so that PROJ falls back to a less accurate operation.
     """
     steps: list[tuple[pyproj.CRS, pyproj.CRS]] = []
     source_base, target_base = _base_crs(source), _base_crs(target)
@@ -404,9 +438,36 @@ def _transformer(source: pyproj.CRS, target: pyproj.CRS) -> _Transformation:
             f"{target.name!r}; a plain EngineeringCRS is not georeferenced: label the model "
             f"with set_crs and derived_engineering_crs first"
         ) from error
+    for start, end in steps:
+        _warn_about_missing_grids(start, end)
     if len(transformers) == 1:
         return transformers[0]
     return _Chain(transformers)
+
+
+def _warn_about_missing_grids(start: pyproj.CRS, end: pyproj.CRS) -> None:
+    """Warns when PROJ's best transformation between two CRSs needs grids it does not have."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # pyproj warns too, with less to go on
+        group = TransformerGroup(start, end, always_xy=True)
+    if group.best_available:
+        return
+    grids = sorted(
+        {
+            grid.short_name
+            for operation in group.unavailable_operations
+            for grid in operation.grids
+            if not grid.available
+        }
+    )
+    fallback = group.transformers[0].description if group.transformers else "nothing"
+    warnings.warn(
+        f"the best transformation from {start.name!r} to {end.name!r} needs the grids "
+        f"{', '.join(grids)}, which PROJ cannot find; it uses {fallback!r} instead (about a "
+        f"metre off for RD New to ETRS89). Install the grids or enable the PROJ network "
+        f"(pyproj.network.set_network_enabled(True))",
+        skip_file_prefixes=(_PACKAGE_DIR,),
+    )
 
 
 def _base_crs(crs: pyproj.CRS) -> pyproj.CRS | None:
@@ -460,14 +521,6 @@ def _transform_meshes(mesh: pl.Series, transformer: _Transformation) -> tuple[pl
         raise ValueError("a mesh has null vertex coordinates")
     moved = _transform_points(transformer, flat.reshape(-1, 3))
     rows = np.repeat(np.arange(len(mesh)), counts // 3)
-    points = pl.DataFrame(
-        {
-            "row": rows,
-            "x": moved[:, 0],
-            "y": moved[:, 1],
-            "z": moved[:, 2],
-        }
-    )
     index = pl.DataFrame({"row": np.arange(len(mesh))})
     coordinates = pl.DataFrame({"row": np.repeat(rows, 3), "v": moved.ravel()})
     rebuilt = index.join(
@@ -475,7 +528,7 @@ def _transform_meshes(mesh: pl.Series, transformer: _Transformation) -> tuple[pl
         on="row",
         how="left",
         maintain_order="left",
-    )["v"]
+    )["v"].fill_null([])
     new_mesh = (
         pl.DataFrame([mesh.alias("mesh"), rebuilt.alias("vertices")])
         .select(
@@ -492,6 +545,7 @@ def _transform_meshes(mesh: pl.Series, transformer: _Transformation) -> tuple[pl
         )["mesh"]
         .cast(MESH_DTYPE)
     )
+    points = pl.DataFrame({"row": rows, "x": moved[:, 0], "y": moved[:, 1], "z": moved[:, 2]})
     bounds = index.join(
         points.group_by("row", maintain_order=True).agg(
             xmin=pl.col("x").min(),
@@ -505,13 +559,38 @@ def _transform_meshes(mesh: pl.Series, transformer: _Transformation) -> tuple[pl
         how="left",
         maintain_order="left",
     )
-    bbox = bounds.select(
+    return new_mesh, _bbox_series(bounds)
+
+
+def _transform_bboxes(bbox: pl.Series, transformer: _Transformation) -> pl.Series:
+    """Moves a ``bbox`` column on its own: the bounds of the eight moved corners of each box.
+
+    Under a rotation the result is looser than the box of the moved geometry, but it still
+    covers it, which is what the GeoParquet covering needs.
+    """
+    boxes = np.column_stack([bbox.struct.field(field).to_numpy() for field in _BBOX_FIELDS])
+    present = np.flatnonzero(bbox.is_not_null().to_numpy())
+    low, high = boxes[present, :3], boxes[present, 3:]
+    signs = np.array([[sx, sy, sz] for sx in (0, 1) for sy in (0, 1) for sz in (0, 1)])
+    corners = low[:, None, :] + signs[None, :, :] * (high - low)[:, None, :]
+    moved = _transform_points(transformer, corners.reshape(-1, 3)).reshape(-1, 8, 3)
+    values = np.full((len(bbox), 6), np.nan)
+    values[present, :3] = moved.min(axis=1)
+    values[present, 3:] = moved.max(axis=1)
+    bounds = pl.DataFrame(
+        {field: values[:, column] for column, field in enumerate(_BBOX_FIELDS)}
+    ).fill_nan(None)
+    return _bbox_series(bounds)
+
+
+def _bbox_series(bounds: pl.DataFrame) -> pl.Series:
+    """A ``bbox`` column from a frame of bounds, null where ``xmin`` is null."""
+    return bounds.select(
         pl.when(pl.col("xmin").is_null())
         .then(None)
-        .otherwise(pl.struct("xmin", "ymin", "zmin", "xmax", "ymax", "zmax"))
+        .otherwise(pl.struct(*_BBOX_FIELDS))
         .alias("bbox")
     )["bbox"].cast(BBOX_DTYPE)
-    return new_mesh, bbox
 
 
 def _transform_elevations(frame: pl.DataFrame, transformer: _Transformation) -> pl.Series:
@@ -521,29 +600,13 @@ def _transform_elevations(frame: pl.DataFrame, transformer: _Transformation) -> 
     present = np.flatnonzero(elevation.is_not_null().to_numpy())
     if len(present) == 0:
         return elevation
-    centre = _plan_centre(frame)
+    centre = _extent(frame, 0.0)[0]
     points = np.column_stack(
         [np.full(len(present), centre[0]), np.full(len(present), centre[1]), values[present]]
     )
     moved = np.full(len(elevation), np.nan)
     moved[present] = _transform_points(transformer, points)[:, 2]
     return pl.Series("elevation", moved, dtype=pl.Float64).fill_nan(None)
-
-
-def _plan_centre(frame: pl.DataFrame) -> tuple[float, float]:
-    """The centre of the model's ``bbox`` column in plan; the origin without one."""
-    if "bbox" not in frame.columns or frame.schema["bbox"] != BBOX_DTYPE:
-        return (0.0, 0.0)
-    bbox = pl.col("bbox").struct
-    extent = frame.select(
-        bbox.field("xmin").min(),
-        bbox.field("ymin").min(),
-        bbox.field("xmax").max(),
-        bbox.field("ymax").max(),
-    ).row(0)
-    if None in extent:
-        return (0.0, 0.0)
-    return ((extent[0] + extent[2]) / 2, (extent[1] + extent[3]) / 2)
 
 
 def _transform_wkb(wkb: pl.Series, transformer: _Transformation) -> pl.Series:
@@ -560,7 +623,12 @@ def _transform_wkb(wkb: pl.Series, transformer: _Transformation) -> pl.Series:
 
 
 def _clamp_to_bbox(wkb: pl.Series, bbox: pl.Series) -> pl.Series:
-    """Keeps every moved footprint inside its row's moved ``bbox`` (its GeoParquet covering)."""
+    """Keeps every moved footprint inside its row's moved ``bbox`` (its GeoParquet covering).
+
+    A footprint vertex can land a rounding step outside the box of the mesh vertices, and
+    farther when the transformation lets x and y depend on z (a 3D Helmert does, by less than
+    a tenth of a millimetre). Only x and y are clipped; z stays.
+    """
     geometries = shapely.from_wkb(wkb.to_numpy())
     bounds = shapely.bounds(geometries)
     low = np.column_stack(
@@ -575,9 +643,20 @@ def _clamp_to_bbox(wkb: pl.Series, bbox: pl.Series) -> pl.Series:
         return wkb
     values = wkb.to_list()
     for row in np.flatnonzero(outside):
-        clamped = _clamp(geometries[row], low[row], high[row])
+        clamped = _clamp_xy(geometries[row], low[row], high[row])
         values[row] = shapely.to_wkb(clamped, flavor="iso")
     return pl.Series(wkb.name, values, dtype=pl.Binary)
+
+
+def _clamp_xy(
+    geometry: shapely.Geometry, low: np.ndarray[Any, Any], high: np.ndarray[Any, Any]
+) -> shapely.Geometry:
+    """Moves the x and y of a 3D geometry's coordinates outside a box onto its edge; z stays."""
+
+    def clip(coordinates: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
+        return np.column_stack([np.clip(coordinates[:, :2], low, high), coordinates[:, 2:]])
+
+    return shapely.transform(geometry, clip, include_z=True)
 
 
 def _affine_matrix(
@@ -597,7 +676,7 @@ def _affine_matrix(
         return None
     target_factors = np.array([axis.unit_conversion_factor for axis in target.axis_info])
     if source.is_geographic:
-        centre, half = np.zeros(3), 0.01  # about a kilometre in degrees
+        centre, half = _extent(frame, _PROBE_HALF_SIZE_DEGREES)
     else:
         factor = source.axis_info[0].unit_conversion_factor
         centre, half = _extent(frame, _PROBE_HALF_SIZE / factor)
@@ -619,7 +698,10 @@ def _affine_matrix(
 def _extent(
     frame: pl.DataFrame, least_half: float
 ) -> tuple[np.ndarray[Any, np.dtype[np.float64]], float]:
-    """The centre of the model's ``bbox`` column and the half size of the cube around it."""
+    """The centre of the model's ``bbox`` column and the half size of the cube around it.
+
+    The origin and ``least_half`` without a usable ``bbox`` column.
+    """
     if "bbox" not in frame.columns or frame.schema["bbox"] != BBOX_DTYPE:
         return np.zeros(3), least_half
     bbox = pl.col("bbox").struct
