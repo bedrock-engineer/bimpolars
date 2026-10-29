@@ -37,3 +37,22 @@ def test_fetch_downloads_a_missing_file(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert not path.with_name(path.name + ".part").exists()
     with pytest.raises(urllib.error.URLError):
         data.fetch("sub/missing.parquet")
+
+
+def test_a_failed_download_leaves_no_partial_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bucket = tmp_path / "bucket"
+    bucket.mkdir()
+    (bucket / "model.ifc").write_bytes(b"ISO-10303-21;")
+    monkeypatch.setattr(data, "DATA_URL", bucket.as_uri() + "/")
+    monkeypatch.setenv(data.DATA_DIR_ENV, str(tmp_path / "local"))
+
+    def interrupted(source, destination) -> None:
+        destination.write(b"ISO")
+        raise ConnectionResetError("cut off")
+
+    monkeypatch.setattr(data.shutil, "copyfileobj", interrupted)
+    with pytest.raises(ConnectionResetError):
+        data.fetch("model.ifc")
+    assert list((tmp_path / "local").iterdir()) == []

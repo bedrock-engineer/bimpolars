@@ -15,8 +15,14 @@ METADATA_KEY = "bimpolars"
 METADATA_VERSION = 1
 """The layout version of the JSON under :data:`METADATA_KEY`."""
 
-STYLE_DTYPE = pl.Struct({"name": pl.String, "rgba": pl.Array(pl.Float64, 4), "faces": pl.UInt32})
-"""One surface style of a mesh: its name, colour (0..1) and how many faces it covers."""
+STYLE_DTYPE = pl.Struct(
+    {"name": pl.String, "rgba": pl.Array(pl.Float64, 4), "face_count": pl.UInt32}
+)
+"""One surface style of a mesh: its name, colour (0..1) and how many faces it covers.
+
+A null ``name`` means the faces have no style. Styles with one name can differ in colour, so
+group by ``(name, rgba)`` for one material per style.
+"""
 
 MESH_DTYPE = pl.Struct(
     {
@@ -28,8 +34,9 @@ MESH_DTYPE = pl.Struct(
 """A triangle mesh in model coordinates.
 
 ``vertices`` is flat (x, y, z, x, y, z, ...) and ``faces`` holds three vertex indices per
-triangle. The faces are sorted by style: the first ``styles[0].faces`` triangles have the first
-style, the next ``styles[1].faces`` the second, and so on. Every face has exactly one style.
+triangle. The faces are sorted by style: the first ``styles[0].face_count`` triangles have the
+first style, the next ``styles[1].face_count`` the second, and so on, one block per style.
+Every face has exactly one style.
 """
 
 BBOX_DTYPE = pl.Struct(
@@ -140,10 +147,12 @@ class BimDataFrame:
 
         Args:
             file: Where to write: a path or a binary file object.
-            **kwargs: Passed on to :meth:`polars.DataFrame.write_parquet`, except ``metadata``.
+            **kwargs: Passed on to :meth:`polars.DataFrame.write_parquet`. A ``metadata`` dict
+                is written too, next to the :data:`METADATA_KEY` entry.
         """
-        metadata = {"version": METADATA_VERSION, "crs": self._crs}
-        self._frame.write_parquet(file, metadata={METADATA_KEY: json.dumps(metadata)}, **kwargs)
+        metadata = dict(kwargs.pop("metadata", None) or {})
+        metadata[METADATA_KEY] = json.dumps({"version": METADATA_VERSION, "crs": self._crs})
+        self._frame.write_parquet(file, metadata=metadata, **kwargs)
 
     @classmethod
     def read_parquet(cls, source: str | Path | IO[bytes]) -> BimDataFrame:
@@ -156,17 +165,24 @@ class BimDataFrame:
             The BimDataFrame, CRS included.
 
         Raises:
-            ValueError: If the file has no :data:`METADATA_KEY` metadata.
+            ValueError: If the file has no :data:`METADATA_KEY` metadata, or metadata of a
+                layout this version does not read.
         """
-        metadata = pl.read_parquet_metadata(source).get(METADATA_KEY)
-        if metadata is None:
+        raw = pl.read_parquet_metadata(source).get(METADATA_KEY)
+        if raw is None:
             raise ValueError(
                 f"not a BimDataFrame: the Parquet file has no {METADATA_KEY!r} metadata"
+            )
+        metadata = json.loads(raw)
+        if metadata.get("version") != METADATA_VERSION:
+            raise ValueError(
+                f"the {METADATA_KEY!r} metadata has layout version {metadata.get('version')!r}; "
+                f"this version of bimpolars reads {METADATA_VERSION}"
             )
         if hasattr(source, "seek"):
             source.seek(0)
         frame = pl.read_parquet(source)
-        return cls(frame, json.loads(metadata)["crs"])
+        return cls(frame, metadata["crs"])
 
 
 def read_parquet(source: str | Path | IO[bytes]) -> BimDataFrame:

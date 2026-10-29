@@ -14,8 +14,8 @@ def small() -> BimDataFrame:
         "vertices": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
         "faces": [0, 1, 2, 1, 3, 2],
         "styles": [
-            {"name": "Concrete", "rgba": [0.5, 0.5, 0.5, 1.0], "faces": 1},
-            {"name": None, "rgba": [0.7, 0.7, 0.7, 1.0], "faces": 1},
+            {"name": "Concrete", "rgba": [0.5, 0.5, 0.5, 1.0], "face_count": 1},
+            {"name": None, "rgba": [0.7, 0.7, 0.7, 1.0], "face_count": 1},
         ],
     }
     frame = pl.DataFrame(
@@ -94,6 +94,23 @@ def test_parquet_without_metadata_is_refused(small: BimDataFrame, tmp_path) -> N
     small.frame.write_parquet(path)
     with pytest.raises(ValueError, match="bimpolars"):
         read_parquet(path)
+
+
+def test_parquet_of_another_layout_version_is_refused(small: BimDataFrame, tmp_path) -> None:
+    path = tmp_path / "future.parquet"
+    metadata = {METADATA_KEY: json.dumps({"version": 2, "crs": small.crs})}
+    small.frame.write_parquet(path, metadata=metadata)
+    with pytest.raises(ValueError, match="layout version 2"):
+        read_parquet(path)
+
+
+def test_write_parquet_keeps_the_callers_metadata(small: BimDataFrame, tmp_path) -> None:
+    path = tmp_path / "tagged.parquet"
+    small.write_parquet(path, metadata={"source": "test"})
+    metadata = pl.read_parquet_metadata(path)
+    assert metadata["source"] == "test"
+    assert json.loads(metadata[METADATA_KEY])["crs"] == small.crs
+    assert read_parquet(path).equals(small)
 
 
 def test_constructor_checks_its_arguments(small: BimDataFrame) -> None:

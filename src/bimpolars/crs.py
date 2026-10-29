@@ -41,8 +41,7 @@ class LinearUnit(NamedTuple):
 def engineering_crs(
     name: str = "Model coordinates",
     *,
-    unit: str = "metre",
-    unit_factor: float | None = None,
+    unit: str | LinearUnit = "metre",
     datum: str = "Model origin",
 ) -> dict[str, Any]:
     """Builds a plain engineering CRS as PROJJSON.
@@ -52,25 +51,26 @@ def engineering_crs(
 
     Args:
         name: The CRS name, typically derived from the model's name.
-        unit: The length unit of the axes. A name from :data:`LINEAR_UNITS`, or any name when
-            ``unit_factor`` is given.
-        unit_factor: How many metres one ``unit`` is. Defaults to the factor of a known
-            ``unit``.
+        unit: The length unit of the axes: a name from :data:`LINEAR_UNITS`, or a
+            :class:`LinearUnit` for any other.
         datum: The name of the engineering datum: what the origin is anchored to.
 
     Returns:
         The CRS as a PROJJSON dict.
 
     Raises:
-        ValueError: If ``unit`` is unknown and no ``unit_factor`` is given.
+        ValueError: If ``unit`` is a name :data:`LINEAR_UNITS` does not know.
     """
-    if unit_factor is None:
-        try:
-            unit_factor = LINEAR_UNITS[unit]
-        except KeyError:
+    if isinstance(unit, str):
+        if unit not in LINEAR_UNITS:
             known = ", ".join(LINEAR_UNITS)
-            raise ValueError(f"unknown unit {unit!r}; pass unit_factor or one of {known}") from None
-    unit_json = {"type": "LinearUnit", "name": unit, "conversion_factor": float(unit_factor)}
+            raise ValueError(f"unknown unit {unit!r}; pass a LinearUnit or one of {known}")
+        unit = LinearUnit(unit, LINEAR_UNITS[unit])
+    unit_json = {
+        "type": "LinearUnit",
+        "name": unit.name,
+        "conversion_factor": float(unit.conversion_factor),
+    }
     axes = [
         {"name": "Easting", "abbreviation": "X", "direction": "east", "unit": unit_json},
         {"name": "Northing", "abbreviation": "Y", "direction": "north", "unit": unit_json},

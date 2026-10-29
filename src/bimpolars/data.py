@@ -38,7 +38,7 @@ def data_dir() -> Path:
 
     Returns:
         The folder named by :data:`DATA_DIR_ENV`, or ``bimpolars`` under the user's cache
-        folder (``$XDG_CACHE_HOME`` or ``~/.cache``) when the variable is not set.
+        folder when the variable is not set: ``$XDG_CACHE_HOME`` if set, else ``~/.cache``.
     """
     configured = os.environ.get(DATA_DIR_ENV)
     if configured:
@@ -72,7 +72,11 @@ def fetch(key: str, *, download: bool = True) -> Path:
     url = DATA_URL + urllib.parse.quote(key)
     path.parent.mkdir(parents=True, exist_ok=True)
     partial = path.with_name(path.name + ".part")
-    with urllib.request.urlopen(url) as response, partial.open("wb") as out:
-        shutil.copyfileobj(response, out)
+    try:
+        with urllib.request.urlopen(url) as response, partial.open("wb") as out:
+            shutil.copyfileobj(response, out)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
     partial.replace(path)
     return path

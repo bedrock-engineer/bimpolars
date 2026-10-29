@@ -18,7 +18,7 @@ def test_engineering_crs_defaults() -> None:
 def test_engineering_crs_in_another_unit() -> None:
     crs = engineering_crs("Feet", unit="foot")
     assert linear_unit(crs) == LinearUnit("foot", LINEAR_UNITS["foot"])
-    custom = engineering_crs("Custom", unit="half metre", unit_factor=0.5)
+    custom = engineering_crs("Custom", unit=LinearUnit("half metre", 0.5))
     assert linear_unit(custom) == LinearUnit("half metre", 0.5)
     with pytest.raises(ValueError, match="unknown unit"):
         engineering_crs(unit="furlong")

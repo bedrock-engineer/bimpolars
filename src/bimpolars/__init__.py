@@ -6,9 +6,10 @@ one model CRS, stored as PROJJSON. :func:`read_ifc` fills it from an IFC file an
 wrote.
 """
 
-from bimpolars.crs import engineering_crs, linear_unit
+from bimpolars.crs import LinearUnit, engineering_crs, linear_unit
 from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, STYLE_DTYPE, BimDataFrame, read_parquet
 from bimpolars.ifc import read_ifc
+from bimpolars.properties import properties_series
 
 __version__ = "0.1.0"
 
@@ -17,8 +18,10 @@ __all__ = [
     "MESH_DTYPE",
     "STYLE_DTYPE",
     "BimDataFrame",
+    "LinearUnit",
     "engineering_crs",
     "linear_unit",
+    "properties_series",
     "read_ifc",
     "read_parquet",
 ]

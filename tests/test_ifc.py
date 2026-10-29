@@ -19,7 +19,7 @@ def style_faces(frame: pl.DataFrame) -> pl.DataFrame:
         "id",
         n_faces=mesh.field("faces").list.len() // 3,
         n_faces_styled=mesh.field("styles")
-        .list.eval(pl.element().struct.field("faces"))
+        .list.eval(pl.element().struct.field("face_count"))
         .list.sum(),
         n_styles=mesh.field("styles").list.len(),
     )
@@ -81,7 +81,7 @@ def test_styles_match_the_surface_styles(
     assert unstyled["rgba"].unique().to_list() == [list(DEFAULT_RGBA)]
     rgba = styles["rgba"].to_numpy()
     assert rgba.min() >= 0 and rgba.max() <= 1
-    assert styles["faces"].min() > 0
+    assert styles["face_count"].min() > 0
 
 
 def test_every_face_has_exactly_one_style(sixty5_structural: BimDataFrame) -> None:
@@ -101,9 +101,9 @@ def test_faces_are_sorted_by_style(sixty5_structural: BimDataFrame) -> None:
     assert faces.max() < len(vertices)
     start = 0
     for style in mesh["styles"]:
-        block = faces[start : start + style["faces"]]
-        assert len(block) == style["faces"]
-        start += style["faces"]
+        block = faces[start : start + style["face_count"]]
+        assert len(block) == style["face_count"]
+        start += style["face_count"]
     assert start == len(faces)
 
 
@@ -169,7 +169,8 @@ def test_properties(sixty5_structural: BimDataFrame) -> None:
     assert columns["load_bearing"].all()
     assert columns["volume"].min() > 0
     site = frame.filter(pl.col("class") == "IfcSite")
-    assert site["properties"].null_count() == 1
+    assert site["properties"].null_count() == 0
+    assert all(value is None for value in site["properties"][0].values())
 
 
 def test_crs_is_a_plain_engineering_crs_in_millimetres(sixty5_structural: BimDataFrame) -> None:
