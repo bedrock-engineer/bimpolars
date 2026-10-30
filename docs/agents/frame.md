@@ -1,7 +1,8 @@
 # The frame: rows and columns
 
 A `BimDataFrame` (`src/bimpolars/frame.py`) is a polars DataFrame with one row per element and
-one model CRS as PROJJSON (`src/bimpolars/crs.py`). The readers fill the columns in
+one model CRS, stored as PROJJSON (`bdf.projjson`, `src/bimpolars/crs.py`) and read as a
+`pyproj.CRS` (`bdf.crs`). The readers fill the columns in
 `MODEL_COLUMNS`; `simple_features` adds the `FEATURE_COLUMNS` ([features.md](features.md)),
 `lightbim=True` the `LIGHTBIM_COLUMNS` ([lightbim.md](lightbim.md)) and `geobim.with_geog` the
 `geog` column ([geobim.md](geobim.md)).

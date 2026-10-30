@@ -1,9 +1,9 @@
 # Georeferencing: CRSs, PROJ, to_crs and geog
 
-`src/bimpolars/geobim.py` (the `[geobim]` extra, pyproj) georeferences a model:
-`derived_engineering_crs`, `set_crs`, `to_crs`, `with_geog`, `affine_transformation` and
-`linearized_site_to_ecef`. The core keeps CRSs as PROJJSON dicts (`src/bimpolars/crs.py`)
-without pyproj.
+`src/bimpolars/geobim.py` georeferences a model: `derived_engineering_crs`, `set_crs`, `to_crs`,
+`with_geog`, `affine_transformation` and `linearized_site_to_ecef`, all exported at the top
+level too. pyproj is a core dependency: every CRS argument goes through `crs.resolve_crs`, and
+a model stores its CRS as PROJJSON (`src/bimpolars/crs.py`).
 
 ## to_crs
 
@@ -41,8 +41,8 @@ without pyproj.
 ## geog
 
 - `geog` (`geobim.with_geog`) is `footprint` through `geobim._transformer` to OGC:CRS84h
-  (`crs.CRS84H`, the PROJJSON written out so that the core can label the column), null exactly
-  when `footprint` is, `POLYGON Z EMPTY` where the footprint is.
+  (`crs.CRS84H`, the PROJJSON written out so that the metadata does not change with PROJ), null
+  exactly when `footprint` is, `POLYGON Z EMPTY` where the footprint is.
 - `to_crs` never moves it: `geoparquet.COLUMN_CRS` lists the columns with a CRS of their own,
   and `geobim.WKB_COLUMNS` leaves them out.
 - Its `geo` entry has `CRS84H` as the CRS, the bounds of its own coordinates as the file `bbox`

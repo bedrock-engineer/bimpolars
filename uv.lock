@@ -114,13 +114,11 @@ source = { editable = "." }
 dependencies = [
     { name = "numpy" },
     { name = "polars" },
+    { name = "pyproj" },
     { name = "shapely" },
 ]
 
 [package.optional-dependencies]
-geobim = [
-    { name = "pyproj" },
-]
 ifc = [
     { name = "ifcopenshell" },
 ]
@@ -135,7 +133,6 @@ dev = [
     { name = "ifcopenshell" },
     { name = "mypy" },
     { name = "pyarrow" },
-    { name = "pyproj" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "specklepy", extra = ["bundle"] },
@@ -148,11 +145,11 @@ requires-dist = [
     { name = "ifcopenshell", marker = "extra == 'ifc'", specifier = ">=0.9.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "polars", specifier = ">=2.0" },
-    { name = "pyproj", marker = "extra == 'geobim'", specifier = ">=3.7" },
+    { name = "pyproj", specifier = ">=3.7" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "specklepy", extras = ["bundle"], marker = "extra == 'speckle'", specifier = "==2026.9.1" },
 ]
-provides-extras = ["geobim", "ifc", "speckle"]
+provides-extras = ["ifc", "speckle"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -161,7 +158,6 @@ dev = [
     { name = "ifcopenshell", specifier = ">=0.9.0" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pyarrow", specifier = ">=16" },
-    { name = "pyproj", specifier = ">=3.7" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "ruff", specifier = ">=0.9" },
     { name = "specklepy", extras = ["bundle"], specifier = "==2026.9.1" },

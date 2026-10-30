@@ -172,7 +172,7 @@ def test_properties(sixty5_structural: BimDataFrame) -> None:
 
 
 def test_crs_is_a_plain_engineering_crs_in_millimetres(sixty5_structural: BimDataFrame) -> None:
-    crs = sixty5_structural.crs
+    crs = sixty5_structural.projjson
     assert crs["type"] == "EngineeringCRS"
     assert crs["name"] == "MM16169 model coordinates"
     axes = crs["coordinate_system"]["axis"]
@@ -186,7 +186,7 @@ def test_parquet_round_trip(sixty5_structural: BimDataFrame, tmp_path) -> None:
     sixty5_structural.write_parquet(path)
     back = read_parquet(path)
     assert back.equals(sixty5_structural)
-    assert back.crs == sixty5_structural.crs
+    assert back.projjson == sixty5_structural.projjson
     assert back.frame.schema == sixty5_structural.frame.schema
     assert "bimpolars" in pl.read_parquet_metadata(path)
 
@@ -208,7 +208,7 @@ def test_prefab_facade() -> None:
     assert len(frame.filter(~pl.col("class").is_in(SPATIAL))) == 1055
     faces = style_faces(frame)
     assert faces.filter(pl.col("n_faces") != pl.col("n_faces_styled")).is_empty()
-    assert bdf.crs["coordinate_system"]["axis"][0]["unit"]["name"] == "millimetre"
+    assert bdf.projjson["coordinate_system"]["axis"][0]["unit"]["name"] == "millimetre"
 
 
 def test_native_geom_holds_the_extruded_sweeps(sixty5_structural: BimDataFrame) -> None:

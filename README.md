@@ -58,14 +58,19 @@ GeoSpeckleViewer, among PDOK's 3D BAG, beside a map of the clicked element's foo
 ```sh
 uv add bimpolars  # or: pip install bimpolars
 uv add "bimpolars[ifc]"  # with ifcopenshell, for read_ifc
-uv add "bimpolars[geobim]"  # with pyproj, for georeferencing
 uv add "bimpolars[speckle]"  # with specklepy, for Speckle bundles
 ```
 
-The core depends on polars, numpy and shapely. Reading IFC (ifcopenshell) is the extra `[ifc]`:
-`import bimpolars` does not import ifcopenshell, `bimpolars.read_ifc` does on first use.
-Georeferencing (pyproj) is the extra `[geobim]`. Reading a Speckle version from its v3 objects needs no specklepy; projecting
-a Speckle bundle to those objects does, and is the extra `[speckle]` (see [Speckle](#speckle)).
+The core depends on polars, numpy, shapely and pyproj, so georeferencing needs no extra.
+Reading IFC (ifcopenshell) is the extra `[ifc]`: `import bimpolars` does not import
+ifcopenshell, `bimpolars.read_ifc` does on first use. Reading a Speckle version from its v3
+objects needs no specklepy; projecting a Speckle bundle to those objects does, and is the extra
+`[speckle]` (see [Speckle](#speckle)).
+
+A CRS goes in in any form pyproj reads: PROJJSON, a `pyproj.CRS`, `"EPSG:7415"`, an EPSG code
+or WKT (`bimpolars.CRSLike`). A `BimDataFrame` stores it as PROJJSON (`bdf.projjson`), which
+is what its GeoParquet and glTF metadata carry, and hands it out as a `pyproj.CRS` (`bdf.crs`),
+like `GeoDataFrame.crs`.
 
 ## Functions
 
@@ -117,13 +122,15 @@ a Speckle bundle to those objects does, and is the extra `[speckle]` (see [Speck
   the `IfcOpeningElement` rows. See [glTF](#gltf).
 - `triangles_glb(groups)`: any triangles in metres, z up, as flat-shaded binary glTF: per
   material name an `(n, 3, 3)` array of corners and an RGB or RGBA colour in 0..1.
-- `BimDataFrame(frame, crs)`: the thin wrapper with `.frame`, `.crs`, `.with_frame()`,
+- `BimDataFrame(frame, crs)`: the thin wrapper, with the CRS in any form, with `.frame`,
+  `.crs` (a `pyproj.CRS`), `.projjson`, `.with_frame()`,
   `.equals()`, `.write_parquet()` and `BimDataFrame.read_parquet()`.
 - `read_parquet(source)`: reads a `BimDataFrame` back, CRS included. The CRS sits under the
   `bimpolars` key of the Parquet file metadata as `{"version": 1, "crs": <PROJJSON>}`.
 - `engineering_crs(name, *, unit, datum)`: a plain EngineeringCRS as PROJJSON in a given
-  length unit (a known name or a `LinearUnit(name, conversion_factor)`), which a model without
-  georeferencing gets. `linear_unit(crs)` reads the unit back.
+  length unit (a known name, a `LinearUnit(name, conversion_factor)`, or a CRS or a model whose
+  unit it copies), which a model without georeferencing gets. `bdf.crs.axis_info[0].unit_name`
+  reads the unit back.
 - `properties_series(rows)`: the Struct column of property sets that `read_ifc` and
   `read_speckle` use, with the dtype per property inferred across rows, for any reader with
   named sets of values.
@@ -155,43 +162,34 @@ a Speckle bundle to those objects does, and is the extra `[speckle]` (see [Speck
 
 ## Georeferencing
 
-`bimpolars.geobim` needs pyproj (the `[geobim]` extra). A model from a reader sits in its own
-coordinates; georeferencing says where that is on earth:
+The georeferencing functions live in `bimpolars.geobim` and on the package itself. A model from
+a reader sits in its own coordinates; georeferencing says where that is on earth:
 
 ```python
-import bimpolars
-from bimpolars.geobim import derived_engineering_crs, set_crs, to_crs
+import bimpolars as bpl
 
-bdf = bimpolars.simple_features(bimpolars.read_ifc("sixty5.ifc"))
+bdf = bpl.simple_features(bpl.read_ifc("sixty5.ifc"))
 # Sixty5: the site origin at RD New (160071.5, 384156.5), NAP +18.625 m, the site's y-axis
-# 50.36 degrees clockwise from grid north, in the model's millimetres
-crs = derived_engineering_crs(
-    "EPSG:7415",
-    160071.5,
-    384156.5,
-    18.625,
-    -50.36,
-    unit=bimpolars.linear_unit(bdf.crs),
-    name="Sixty5",
+# 50.36 degrees clockwise from grid north, in the model's own unit (millimetres)
+crs = bpl.derived_engineering_crs(
+    "EPSG:7415", 160071.5, 384156.5, 18.625, -50.36, unit=bdf, name="Sixty5"
 )
-site = set_crs(bdf, crs)  # the same geometry, now a georeferenced Engineering CRS
-rd = to_crs(site, "EPSG:7415")  # meshes, footprints, bbox and storey levels in RD New + NAP metres
+site = bpl.set_crs(bdf, crs)  # the same geometry, now a georeferenced Engineering CRS
+rd = bpl.to_crs(site, "EPSG:7415")  # meshes, footprints, bbox and levels in RD New + NAP metres
 rd.write_parquet("sixty5_rd.parquet")  # GeoParquet with EPSG:7415
-geographic = to_crs(site, "OGC:CRS84h")  # the whole model in lon, lat, ellipsoidal height
+geographic = bpl.to_crs(site, "OGC:CRS84h")  # the whole model in lon, lat, ellipsoidal height
 
-from bimpolars.geobim import with_geog
-
-site = with_geog(site)  # + geog: the footprints in OGC:CRS84h, next to the site's own
+site = bpl.with_geog(site)  # + geog: the footprints in OGC:CRS84h, next to the site's own
 site.write_parquet("sixty5_geog.parquet")  # GeoParquet with geog as the primary geometry
 geopandas.read_parquet("sixty5_geog.parquet", columns=["id", "class", "geog"]).to_json()  # GeoJSON
 ```
 
 - `derived_engineering_crs(base_crs, easting, northing, orthometric_height, rotation, *, unit, name)`:
-  the Engineering CRS of a site as PROJJSON, derived from a compound of a projected and a
+  the Engineering CRS of a site as a `pyproj.CRS`, derived from a compound of a projected and a
   vertical CRS such as EPSG:7415 (RD New + NAP height): a DerivedProjectedCRS with an Affine
   parametric transformation (EPSG:9624) and a DerivedVerticalCRS with a Vertical Offset
-  (EPSG:9616), with the axes in the site's `unit`. The site origin lands on
-  `(easting, northing, orthometric_height)` and the site's y-axis points `rotation` degrees
+  (EPSG:9616), with the axes in the site's `unit` (`unit=bdf` copies the model's). The site
+  origin lands on `(easting, northing, orthometric_height)` and the site's y-axis points `rotation` degrees
   counterclockwise from grid north (for an IfcMapConversion:
   `degrees(atan2(XAxisOrdinate, XAxisAbscissa))`). PROJ then chains site → base → anything.
 - `set_crs(bdf, crs)`: labels the model with a CRS (PROJJSON, a `pyproj.CRS` or user input such
@@ -334,7 +332,7 @@ Path("structure.glb").write_bytes(bimpolars.element_meshes_glb(structure))
   `(name, rgba)` of their style, so a viewer colours the model as its authoring tool did
   (translucent styles get `alphaMode` BLEND). `IfcOpeningElement` rows are left out: their
   mesh is the void they cut.
-- Metres, from the model's unit (`linear_unit(bdf.crs)`), as glTF requires. The root node
+- Metres, from the model's unit (`bdf.crs.axis_info[0]`), as glTF requires. The root node
   carries the model CRS as `extras.crs` and, next to it, `extras.unit` (`"metre"`): the CRS
   keeps its own unit, the vertex data under the node does not.
 - The vertex data keeps the model's z-up coordinates; the root node, named after the CRS,

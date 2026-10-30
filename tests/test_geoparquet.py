@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import polars as pl
+import pyproj
 import pytest
 import shapely
 
@@ -33,11 +34,11 @@ def small() -> BimDataFrame:
 
 
 def test_a_frame_without_geometry_has_no_geo_metadata(small: BimDataFrame) -> None:
-    assert geo_metadata(small.frame.drop("footprint"), small.crs) is None
+    assert geo_metadata(small.frame.drop("footprint"), small.projjson) is None
 
 
 def test_geo_metadata(small: BimDataFrame) -> None:
-    geo = geo_metadata(small.frame, small.crs)
+    geo = geo_metadata(small.frame, small.projjson)
     assert geo is not None
     assert geo["version"] == GEOPARQUET_VERSION
     assert geo["primary_column"] == "footprint"
@@ -45,7 +46,7 @@ def test_geo_metadata(small: BimDataFrame) -> None:
     column = geo["columns"]["footprint"]
     assert column["encoding"] == "WKB"
     assert column["geometry_types"] == ["Polygon Z"]
-    assert column["crs"] == small.crs
+    assert column["crs"] == small.projjson
     assert column["bbox"] == [-1000.0, -1000.0, 1000.0, 1000.0]
     assert column["covering"] == {
         "bbox": {
@@ -84,7 +85,7 @@ def test_geog_is_the_primary_column_in_its_own_crs(small: BimDataFrame, tmp_path
         lon_lat_square(5.47, 51.45, 61.0),
     ]
     frame = with_geog_column(small, squares)
-    geo = geo_metadata(frame, small.crs)
+    geo = geo_metadata(frame, small.projjson)
     assert geo is not None
     assert geo["primary_column"] == "geog"
     assert list(geo["columns"]) == ["geog", "footprint"]
@@ -95,25 +96,29 @@ def test_geog_is_the_primary_column_in_its_own_crs(small: BimDataFrame, tmp_path
     assert geog["bbox"] == pytest.approx([5.46, 51.44, 5.47001, 51.45001])
     assert "covering" not in geog
     footprint = geo["columns"]["footprint"]
-    assert footprint["crs"] == small.crs
+    assert footprint["crs"] == small.projjson
     assert footprint["bbox"] == [-1000.0, -1000.0, 1000.0, 1000.0]
     assert footprint["covering"]["bbox"]["xmin"] == ["bbox", "xmin"]
     json.dumps(geo)
 
     # Without a geometry, or with empty ones only, geog has no bounds
-    nothing = geo_metadata(with_geog_column(small, [None] * 5), small.crs)
+    nothing = geo_metadata(with_geog_column(small, [None] * 5), small.projjson)
     assert nothing is not None and "bbox" not in nothing["columns"]["geog"]
     assert nothing["columns"]["geog"]["geometry_types"] == []
     empty = shapely.from_wkt("POLYGON Z EMPTY")
-    empties = geo_metadata(with_geog_column(small, [None, None, None, empty, empty]), small.crs)
+    empties = geo_metadata(
+        with_geog_column(small, [None, None, None, empty, empty]), small.projjson
+    )
     assert empties is not None and "bbox" not in empties["columns"]["geog"]
     assert empties["columns"]["geog"]["geometry_types"] == ["Polygon Z"]
     # An empty geometry next to a real one does not widen the bounds
-    mixed = geo_metadata(with_geog_column(small, [None, None, None, squares[3], empty]), small.crs)
+    mixed = geo_metadata(
+        with_geog_column(small, [None, None, None, squares[3], empty]), small.projjson
+    )
     assert mixed is not None
     assert mixed["columns"]["geog"]["bbox"] == pytest.approx([5.46, 51.44, 5.46001, 51.44001])
     # geog alone is a GeoParquet geometry too
-    alone = geo_metadata(frame.drop("footprint"), small.crs)
+    alone = geo_metadata(frame.drop("footprint"), small.projjson)
     assert alone is not None and list(alone["columns"]) == ["geog"]
 
     # Written, read back, and read by geopandas with geog as the active geometry
@@ -123,11 +128,10 @@ def test_geog_is_the_primary_column_in_its_own_crs(small: BimDataFrame, tmp_path
     assert json.loads(pl.read_parquet_metadata(path)[GEO_METADATA_KEY]) == geo
     assert read_parquet(path).equals(bdf)
     geopandas = pytest.importorskip("geopandas")
-    pyproj = pytest.importorskip("pyproj")
     gdf = geopandas.read_parquet(path)
     assert gdf.geometry.name == "geog"
     assert gdf.crs == pyproj.CRS("OGC:CRS84h")
-    assert gdf["footprint"].crs == pyproj.CRS.from_json_dict(small.crs)
+    assert gdf["footprint"].crs == small.crs
     assert gdf.geometry.dropna().has_z.all()
     assert list(gdf.geometry.dropna().bounds.iloc[0]) == pytest.approx(
         [5.46, 51.44, 5.46001, 51.44001]
@@ -135,7 +139,7 @@ def test_geog_is_the_primary_column_in_its_own_crs(small: BimDataFrame, tmp_path
 
 
 def test_geo_metadata_without_a_bbox_column(small: BimDataFrame) -> None:
-    geo = geo_metadata(small.frame.drop("bbox"), small.crs)
+    geo = geo_metadata(small.frame.drop("bbox"), small.projjson)
     assert geo is not None
     column = geo["columns"]["footprint"]
     assert "covering" not in column
@@ -143,11 +147,11 @@ def test_geo_metadata_without_a_bbox_column(small: BimDataFrame) -> None:
     renamed = small.frame.with_columns(
         pl.col("bbox").struct.rename_fields(["a", "b", "c", "d", "e", "f"])
     )
-    geo = geo_metadata(renamed, small.crs)
+    geo = geo_metadata(renamed, small.projjson)
     assert geo is not None
     assert "covering" not in geo["columns"]["footprint"]
     with pytest.raises(TypeError, match="Binary"):
-        geo_metadata(small.frame.with_columns(footprint=pl.lit("POLYGON EMPTY")), small.crs)
+        geo_metadata(small.frame.with_columns(footprint=pl.lit("POLYGON EMPTY")), small.projjson)
 
 
 def test_wkb_geometry_types() -> None:
@@ -183,8 +187,8 @@ def test_write_parquet_writes_geoparquet(small: BimDataFrame, tmp_path: Path) ->
     path = tmp_path / "small.parquet"
     small.write_parquet(path)
     metadata = pl.read_parquet_metadata(path)
-    assert json.loads(metadata[GEO_METADATA_KEY]) == geo_metadata(small.frame, small.crs)
-    assert json.loads(metadata[METADATA_KEY])["crs"] == small.crs
+    assert json.loads(metadata[GEO_METADATA_KEY]) == geo_metadata(small.frame, small.projjson)
+    assert json.loads(metadata[METADATA_KEY])["crs"] == small.projjson
     back = read_parquet(path)
     assert back.equals(small)
     assert back.frame.schema["footprint"] == pl.Binary
@@ -206,14 +210,13 @@ def test_geopandas_reads_the_crs_and_the_bbox_covering(
     sixty5_structural_features: BimDataFrame, tmp_path: Path
 ) -> None:
     geopandas = pytest.importorskip("geopandas")
-    pyproj = pytest.importorskip("pyproj")
     path = tmp_path / "sixty5.parquet"
     sixty5_structural_features.write_parquet(path)
     columns = ["id", "class", "footprint_ref", "footprint", "bbox"]
     gdf = geopandas.read_parquet(path, columns=columns)
     assert len(gdf) == 2687
     assert gdf.geometry.name == "footprint"
-    assert gdf.crs == pyproj.CRS.from_json_dict(sixty5_structural_features.crs)
+    assert gdf.crs == sixty5_structural_features.crs
     assert gdf.crs.axis_info[0].unit_name == "millimetre"
     assert gdf.geometry.isna().sum() == 40
     assert gdf.geometry.dropna().has_z.all()

@@ -2,6 +2,7 @@ import io
 import json
 
 import polars as pl
+import pyproj
 import pytest
 
 from bimpolars import BBOX_DTYPE, MESH_DTYPE, BimDataFrame, engineering_crs, read_parquet
@@ -47,7 +48,7 @@ def small() -> BimDataFrame:
 
 def test_frame_and_crs(small: BimDataFrame) -> None:
     assert len(small) == 2
-    assert small.crs["type"] == "EngineeringCRS"
+    assert small.projjson["type"] == "EngineeringCRS"
     assert "Small model" in repr(small)
     assert "Small model" in small._repr_html_()
 
@@ -56,11 +57,11 @@ def test_crs_is_copied(small: BimDataFrame) -> None:
     crs = engineering_crs("Original")
     bdf = BimDataFrame(small.frame, crs)
     crs["name"] = "Changed"
-    assert bdf.crs["name"] == "Original"
+    assert bdf.projjson["name"] == "Original"
 
 
 def test_equals(small: BimDataFrame) -> None:
-    assert small.equals(BimDataFrame(small.frame, small.crs))
+    assert small.equals(BimDataFrame(small.frame, small.projjson))
     assert not small.equals(small.with_frame(small.frame.head(1)))
     assert not small.equals(BimDataFrame(small.frame, engineering_crs("Other")))
     assert not small.equals(small.frame)
@@ -69,7 +70,7 @@ def test_equals(small: BimDataFrame) -> None:
 def test_with_frame_keeps_the_crs(small: BimDataFrame) -> None:
     slabs = small.with_frame(small.frame.filter(pl.col("class") == "IfcSlab"))
     assert len(slabs) == 1
-    assert slabs.crs == small.crs
+    assert slabs.projjson == small.projjson
 
 
 def test_parquet_round_trip_through_a_path(small: BimDataFrame, tmp_path) -> None:
@@ -79,7 +80,7 @@ def test_parquet_round_trip_through_a_path(small: BimDataFrame, tmp_path) -> Non
     assert back.equals(small)
     assert back.frame.schema == small.frame.schema
     metadata = json.loads(pl.read_parquet_metadata(path)[METADATA_KEY])
-    assert metadata == {"version": 1, "crs": small.crs}
+    assert metadata == {"version": 1, "crs": small.projjson}
 
 
 def test_parquet_round_trip_through_a_buffer(small: BimDataFrame) -> None:
@@ -98,7 +99,7 @@ def test_parquet_without_metadata_is_refused(small: BimDataFrame, tmp_path) -> N
 
 def test_parquet_of_another_layout_version_is_refused(small: BimDataFrame, tmp_path) -> None:
     path = tmp_path / "future.parquet"
-    metadata = {METADATA_KEY: json.dumps({"version": 2, "crs": small.crs})}
+    metadata = {METADATA_KEY: json.dumps({"version": 2, "crs": small.projjson})}
     small.frame.write_parquet(path, metadata=metadata)
     with pytest.raises(ValueError, match="layout version 2"):
         read_parquet(path)
@@ -109,14 +110,20 @@ def test_write_parquet_keeps_the_callers_metadata(small: BimDataFrame, tmp_path)
     small.write_parquet(path, metadata={"source": "test"})
     metadata = pl.read_parquet_metadata(path)
     assert metadata["source"] == "test"
-    assert json.loads(metadata[METADATA_KEY])["crs"] == small.crs
+    assert json.loads(metadata[METADATA_KEY])["crs"] == small.projjson
     assert read_parquet(path).equals(small)
 
 
 def test_constructor_checks_its_arguments(small: BimDataFrame) -> None:
     with pytest.raises(TypeError):
-        BimDataFrame([], small.crs)  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
-        BimDataFrame(small.frame, "EPSG:28992")  # type: ignore[arg-type]
+        BimDataFrame([], small.projjson)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="pyproj cannot read"):
+        BimDataFrame(small.frame, "not a CRS")
     with pytest.raises(ValueError):
         BimDataFrame(small.frame, {"name": "no type"})
+
+
+def test_constructor_takes_a_crs_in_any_form(small: BimDataFrame) -> None:
+    rd_nap = pyproj.CRS("EPSG:7415")
+    for crs in ("EPSG:7415", 7415, rd_nap, rd_nap.to_wkt()):
+        assert BimDataFrame(small.frame, crs).crs == rd_nap

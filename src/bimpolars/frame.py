@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import IO, Any
 
 import polars as pl
+import pyproj
 
+from bimpolars.crs import CRSLike, resolve_crs
 from bimpolars.geoparquet import GEO_METADATA_KEY, geo_metadata
 
 METADATA_KEY = "bimpolars"
@@ -101,30 +103,37 @@ class BimDataFrame:
 
     Attributes:
         frame: The elements, one row each.
-        crs: The model CRS as a PROJJSON dict.
+        crs: The model CRS as a ``pyproj.CRS``, like ``GeoDataFrame.crs``.
+        projjson: The model CRS as the PROJJSON dict the frame stores and writes.
     """
 
-    __slots__ = ("_crs", "_frame")
+    __slots__ = ("_crs", "_frame", "_projjson")
 
-    def __init__(self, frame: pl.DataFrame, crs: Mapping[str, Any]) -> None:
+    def __init__(self, frame: pl.DataFrame, crs: CRSLike) -> None:
         """Wraps a frame of elements and its CRS.
 
         Args:
             frame: The elements, one row each.
-            crs: The model CRS as PROJJSON (see :func:`bimpolars.engineering_crs`).
+            crs: The model CRS in any form: PROJJSON (see :func:`bimpolars.engineering_crs`),
+                a ``pyproj.CRS``, or user input such as ``"EPSG:7415"``. It is stored as
+                PROJJSON.
 
         Raises:
-            TypeError: If ``frame`` is not a polars DataFrame or ``crs`` not a mapping.
-            ValueError: If ``crs`` has no ``type``.
+            TypeError: If ``frame`` is not a polars DataFrame.
+            ValueError: If ``crs`` is PROJJSON without a ``type``, or pyproj cannot read it.
         """
         if not isinstance(frame, pl.DataFrame):
             raise TypeError(f"frame must be a polars DataFrame, not {type(frame).__name__}")
-        if not isinstance(crs, Mapping):
-            raise TypeError(f"crs must be a PROJJSON mapping, not {type(crs).__name__}")
-        if "type" not in crs:
-            raise ValueError("crs is not PROJJSON: it has no 'type'")
+        if isinstance(crs, Mapping):
+            if "type" not in crs:
+                raise ValueError("crs is not PROJJSON: it has no 'type'")
+            # PROJJSON is kept as the caller wrote it, without a round trip through pyproj
+            projjson: dict[str, Any] = json.loads(json.dumps(crs))
+        else:
+            _, projjson = resolve_crs(crs)
         self._frame = frame
-        self._crs: dict[str, Any] = json.loads(json.dumps(crs))
+        self._projjson = projjson
+        self._crs: pyproj.CRS | None = None  # read from the PROJJSON on first use
 
     @property
     def frame(self) -> pl.DataFrame:
@@ -132,19 +141,28 @@ class BimDataFrame:
         return self._frame
 
     @property
-    def crs(self) -> dict[str, Any]:
-        """The model CRS as a PROJJSON dict."""
+    def crs(self) -> pyproj.CRS:
+        """The model CRS as a ``pyproj.CRS``, read from :attr:`projjson`."""
+        if self._crs is None:
+            self._crs = pyproj.CRS.from_json_dict(self._projjson)
         return self._crs
+
+    @property
+    def projjson(self) -> dict[str, Any]:
+        """The model CRS as PROJJSON: what the frame stores, and writes into Parquet and glTF."""
+        return self._projjson
 
     def __len__(self) -> int:
         return len(self._frame)
 
     def __repr__(self) -> str:
-        return f"BimDataFrame({len(self)} rows, crs={self._crs.get('name')!r})\n{self._frame!r}"
+        name = self._projjson.get("name")
+        return f"BimDataFrame({len(self)} rows, crs={name!r})\n{self._frame!r}"
 
     def _repr_html_(self) -> str:
         return (
-            f"<p><b>BimDataFrame</b>: crs {self._crs.get('name')!r}</p>{self._frame._repr_html_()}"
+            f"<p><b>BimDataFrame</b>: crs {self._projjson.get('name')!r}</p>"
+            f"{self._frame._repr_html_()}"
         )
 
     def with_frame(self, frame: pl.DataFrame) -> BimDataFrame:
@@ -156,7 +174,7 @@ class BimDataFrame:
         Returns:
             A BimDataFrame with ``frame`` and this model's CRS.
         """
-        return BimDataFrame(frame, self._crs)
+        return BimDataFrame(frame, self._projjson)
 
     def equals(self, other: object) -> bool:
         """Whether another BimDataFrame has the same CRS and the same frame.
@@ -165,11 +183,11 @@ class BimDataFrame:
             other: Anything; only a BimDataFrame can be equal.
 
         Returns:
-            True if the CRS dicts are equal and the frames are equal, nulls included.
+            True if the PROJJSON of the CRSs is equal and the frames are equal, nulls included.
         """
         if not isinstance(other, BimDataFrame):
             return False
-        return self._crs == other._crs and self._frame.equals(other._frame)
+        return self._projjson == other._projjson and self._frame.equals(other._frame)
 
     def write_parquet(self, file: str | Path | IO[bytes], **kwargs: Any) -> None:
         """Writes the frame to Parquet with the CRS in the file metadata.
@@ -194,8 +212,8 @@ class BimDataFrame:
                 if any, are replaced by the ones described above.
         """
         metadata = dict(kwargs.pop("metadata", None) or {})
-        metadata[METADATA_KEY] = json.dumps({"version": METADATA_VERSION, "crs": self._crs})
-        geo = geo_metadata(self._frame, self._crs)
+        metadata[METADATA_KEY] = json.dumps({"version": METADATA_VERSION, "crs": self._projjson})
+        geo = geo_metadata(self._frame, self._projjson)
         if geo is not None:
             metadata[GEO_METADATA_KEY] = json.dumps(geo)
         self._frame.write_parquet(file, metadata=metadata, **kwargs)

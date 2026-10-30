@@ -20,13 +20,13 @@ from bimpolars import (
     MESH_DTYPE,
     BimDataFrame,
     data,
-    linear_unit,
     read_ifc,
     read_parquet,
     read_speckle,
     simple_features,
     version_objects,
 )
+from bimpolars.crs import as_linear_unit
 from bimpolars.frame import MODEL_COLUMNS
 from bimpolars.speckle import LEVEL_CLASS, OBJECT_SET
 from tests.speckle_helpers import INSTANCE_TYPE, faces_by_row, own_geometry_and_placements
@@ -129,10 +129,10 @@ def test_columns_and_crs(arch: BimDataFrame) -> None:
     assert frame.schema["mesh"] == MESH_DTYPE
     assert frame.schema["bbox"] == BBOX_DTYPE
     assert frame.schema["native_geom"] == pl.Null
-    assert arch.crs["type"] == "EngineeringCRS"
-    assert arch.crs["name"] == "advanced_sample_project_arch model coordinates"
-    assert arch.crs["datum"]["name"] == "Revit project base point"
-    assert linear_unit(arch.crs).name == "millimetre"
+    assert arch.projjson["type"] == "EngineeringCRS"
+    assert arch.projjson["name"] == "advanced_sample_project_arch model coordinates"
+    assert arch.projjson["datum"]["name"] == "Revit project base point"
+    assert as_linear_unit(arch.projjson).name == "millimetre"
     assert frame["id"].n_unique() == len(frame)
 
 
@@ -410,7 +410,7 @@ def test_structural(structural: BimDataFrame) -> None:
     assert faces.filter(pl.col("n_faces") != pl.col("n_faces_styled")).is_empty()
     styles = frame.select(pl.col("mesh").struct.field("styles")).drop_nulls().explode("styles")
     assert styles.unnest("styles").select("name", "rgba").n_unique() == 5
-    assert structural.crs["name"] == "advanced_sample_project_str model coordinates"
+    assert structural.projjson["name"] == "advanced_sample_project_str model coordinates"
 
 
 def test_mep(mep: BimDataFrame, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -427,7 +427,7 @@ def test_mep(mep: BimDataFrame, monkeypatch: pytest.MonkeyPatch) -> None:
     assert INSTANCE_TYPE not in counts
     assert style_faces(frame)["n_faces"].sum() == 420_077
     # the model sits at Revit's Munich default: the geolocation is not used, the CRS is plain
-    assert mep.crs["type"] == "EngineeringCRS"
+    assert mep.projjson["type"] == "EngineeringCRS"
     # six conceptual masses with geometry of their own lie up to 77 m west and 122 m south of
     # the building, whose other elements start at x -19.4 m, y -13.7 m
     assert extent(frame)[[0, 1]] == pytest.approx([-76774.748, -121732.265], abs=0.001)
