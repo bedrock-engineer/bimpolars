@@ -38,8 +38,8 @@ Tests that read a model of hundreds of MB are marked `slow` and run only with
   `tests/test_speckle.py::test_the_core_imports_without_specklepy`.
 - The Pages site (`.github/workflows/pages.yml`) is specklestuff's demo page (its `site/`),
   built from specklestuff's main with that repository's lock of bimpolars, so it shows the
-  same page as specklestuff's Pages under bimpolars' title (the workflow's `VITE_SITE_TITLE`);
-  nothing else of it lives here. A page of bimpolars' own, or one built from this repository's
+  same page as specklestuff's Pages under bimpolars' header (the workflow's `SITE=bimpolars`
+  picks specklestuff's `site/intro/bimpolars.html`); nothing else of it lives here. A page of bimpolars' own, or one built from this repository's
   main, needs that workflow to change.
 
 ## Docs
