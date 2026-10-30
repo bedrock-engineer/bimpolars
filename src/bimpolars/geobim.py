@@ -45,7 +45,7 @@ from bimpolars.crs import (
     unit_projjson,
 )
 from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, BimDataFrame
-from bimpolars.geoparquet import COLUMN_CRS, GEOMETRY_COLUMNS
+from bimpolars.geoparquet import COLUMN_CRS, GEOG_COLUMN, GEOMETRY_COLUMNS
 
 CRSLike = Mapping[str, Any] | pyproj.CRS | str | int
 """A CRS as PROJJSON, a ``pyproj.CRS``, or anything ``pyproj.CRS.from_user_input`` reads."""
@@ -59,9 +59,6 @@ They are the :data:`bimpolars.geoparquet.GEOMETRY_COLUMNS` without the columns i
 their own (:data:`bimpolars.geoparquet.COLUMN_CRS`): ``geog``, the footprints in OGC:CRS84h
 of :func:`with_geog`, never changes CRS.
 """
-
-GEOG_COLUMN = "geog"
-"""The column :func:`with_geog` adds: the footprints in OGC:CRS84h."""
 
 AFFINE_TOLERANCE = 1e-6
 """How far, in metres, a transformation may stray from an affine fit and still be affine."""
@@ -324,7 +321,9 @@ def with_geog(bdf: BimDataFrame) -> BimDataFrame:
     coordinates, so the column exports to GeoJSON as it is, and
     :func:`bimpolars.geoparquet.geo_metadata` makes it the primary geometry column of the
     written GeoParquet, with :data:`bimpolars.crs.CRS84H` as its CRS. The model keeps its own
-    CRS and its ``footprint`` next to it, and :func:`to_crs` leaves ``geog`` as it is.
+    CRS and its ``footprint`` next to it, and :func:`to_crs` leaves ``geog`` as it is;
+    :func:`bimpolars.simple_features` drops it when it computes the footprints again, so run
+    ``with_geog`` after it.
 
     The transformation is the one :func:`to_crs` applies for ``"OGC:CRS84h"``, through the base
     CRS of a derived Engineering CRS (see :func:`_transformer`), and it warns in the same way

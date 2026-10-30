@@ -16,6 +16,7 @@ the model CRS implicitly: they are not GeoParquet geometries.
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 from typing import Any
 
@@ -31,7 +32,10 @@ GEO_METADATA_KEY = "geo"
 GEOPARQUET_VERSION = "1.1.0"
 """The GeoParquet specification version the metadata follows."""
 
-GEOMETRY_COLUMNS: tuple[str, ...] = ("geog", "footprint")
+GEOG_COLUMN = "geog"
+"""The column of :func:`bimpolars.geobim.with_geog`: the footprints in OGC:CRS84h."""
+
+GEOMETRY_COLUMNS: tuple[str, ...] = (GEOG_COLUMN, "footprint")
 """The WKB geometry columns a BimDataFrame can hold; the first one present is the primary.
 
 ``geog`` (the footprints in OGC:CRS84h, from :func:`bimpolars.geobim.with_geog`) comes before
@@ -39,7 +43,7 @@ GEOMETRY_COLUMNS: tuple[str, ...] = ("geog", "footprint")
 the primary column then has longitude and latitude, which export to GeoJSON as they are.
 """
 
-COLUMN_CRS: dict[str, dict[str, Any]] = {"geog": CRS84H}
+COLUMN_CRS: dict[str, dict[str, Any]] = {GEOG_COLUMN: CRS84H}
 """The CRS of the geometry columns that are not in the model CRS, as PROJJSON.
 
 ``geog`` is always OGC:CRS84h (:data:`bimpolars.crs.CRS84H`), whatever the model CRS is, so
@@ -106,7 +110,7 @@ def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any]) -> dict[str, Any] 
         column: dict[str, Any] = {
             "encoding": "WKB",
             "geometry_types": _wkb_geometry_types(frame[name]),
-            "crs": dict(own_crs if own_crs is not None else crs),
+            "crs": copy.deepcopy(own_crs if own_crs is not None else dict(crs)),
         }
         if own_crs is not None:
             bounds = _wkb_bounds(frame[name])

@@ -19,7 +19,14 @@ import shapely
 
 pyproj = pytest.importorskip("pyproj")
 
-from bimpolars import BBOX_DTYPE, MESH_DTYPE, BimDataFrame, linear_unit, read_parquet  # noqa: E402
+from bimpolars import (  # noqa: E402
+    BBOX_DTYPE,
+    MESH_DTYPE,
+    BimDataFrame,
+    linear_unit,
+    read_parquet,
+    simple_features,
+)
 from bimpolars.crs import CRS84H  # noqa: E402
 from bimpolars.frame import MODEL_COLUMNS  # noqa: E402
 from bimpolars.geobim import (  # noqa: E402
@@ -96,10 +103,11 @@ SITES = [
     ),
 ]
 
-# The Sixty5 site origin in OGC:CRS84h: Strijp-S, Eindhoven. pyproj moves RD New
-# (160071.5, 384156.5) to (5.46015, 51.44648) through RDNAPTRANS2018; the Helmert fallback
-# without the NSGI grids lands within about a metre, 1e-5 degrees, of that
-SIXTY5_LON_LAT = (5.4602, 51.4465)
+# The Sixty5 site origin in OGC:CRS84h: Strijp-S, Eindhoven, where the Helmert fallback
+# "Amersfoort to WGS 84 (4)" puts RD New (160071.5, 384156.5); RDNAPTRANS2018 (with the NSGI
+# grids) lands within about a metre, 1e-5 degrees, of it. PROJ's null-shift candidate
+# ("Ballpark geographic offset") would land 100 m to the north-east, at (5.46060, 51.44738)
+SIXTY5_LON_LAT = (5.460153, 51.446476)
 
 SITE_POINTS = np.array(
     [
@@ -705,6 +713,75 @@ def test_geog_is_the_primary_geoparquet_column_of_sixty5(
     assert -12 < z < 130  # NAP -12..76 m, plus the geoid with the grids
 
 
+def test_duckdb_spatial_reads_geog_as_the_primary_column(
+    sixty5_geog: BimDataFrame, tmp_path
+) -> None:
+    """DuckDB spatial takes geog with its CRS and gives GeoJSON from it as it is, and the
+    footprint keeps its bbox covering next to it."""
+    duckdb = pytest.importorskip("duckdb")
+    connection = duckdb.connect()
+    try:
+        connection.install_extension("spatial")
+        connection.load_extension("spatial")
+    except duckdb.Error as error:  # the extension repository is not reachable everywhere
+        pytest.skip(f"DuckDB spatial extension unavailable: {error}")
+    path = tmp_path / "sixty5_geog.parquet"
+    sixty5_geog.write_parquet(path)
+    source = f"read_parquet('{path.as_posix()}')"
+    geo = connection.execute(
+        f"SELECT decode(value) FROM parquet_kv_metadata('{path.as_posix()}') "
+        "WHERE decode(key) = 'geo'"
+    ).fetchone()
+    assert geo is not None
+    assert json.loads(geo[0])["primary_column"] == "geog"
+    types = connection.execute(
+        f"SELECT ST_GeometryType(geog) AS type, count(*) AS n FROM {source} "
+        "WHERE geog IS NOT NULL GROUP BY 1"
+    ).fetchall()
+    assert {str(kind): n for kind, n in types} == {"POLYGON": 2644, "MULTIPOLYGON": 3}
+    assert connection.execute(f"SELECT count(*) FROM {source} WHERE geog IS NULL").fetchone() == (
+        40,
+    )
+    # GeoJSON as it is: a column's footprint in longitude, latitude and height, at Strijp-S
+    row = connection.execute(
+        f"SELECT ST_AsGeoJSON(geog), ST_ZMin(geog), ST_ZMax(geog) FROM {source} "
+        "WHERE class = 'IfcColumn' LIMIT 1"
+    ).fetchone()
+    assert row is not None
+    feature = json.loads(row[0])
+    assert feature["type"] == "Polygon"
+    lon, lat, height = feature["coordinates"][0][0]
+    assert abs(lon - SIXTY5_LON_LAT[0]) < 0.002 and abs(lat - SIXTY5_LON_LAT[1]) < 0.002
+    assert -12 < height < 130 and row[1] == row[2] == height  # flat at its storey's level
+    # The footprint's bbox covering still filters in the site's millimetres
+    frame = sixty5_geog.frame
+    column = frame.filter(pl.col("class") == "IfcColumn").row(0, named=True)["bbox"]
+    window = (
+        column["xmin"] - 5000,
+        column["ymin"] - 5000,
+        column["xmax"] + 5000,
+        column["ymax"] + 5000,
+    )
+    bbox = pl.col("bbox").struct
+    expected = frame.filter(
+        (bbox.field("xmin") <= window[2])
+        & (bbox.field("ymin") <= window[3])
+        & (bbox.field("xmax") >= window[0])
+        & (bbox.field("ymax") >= window[1])
+    )
+    in_window = connection.execute(
+        f"SELECT id FROM {source} WHERE bbox.xmin <= {window[2]} AND bbox.ymin <= {window[3]} "
+        f"AND bbox.xmax >= {window[0]} AND bbox.ymax >= {window[1]}"
+    ).fetchall()
+    assert 0 < len(in_window) < len(frame)
+    assert {row[0] for row in in_window} == set(expected["id"])
+    covered = connection.execute(
+        f"SELECT count(*) FROM {source} WHERE footprint IS NOT NULL AND NOT "
+        "ST_Within(footprint, ST_MakeEnvelope(bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax))"
+    )
+    assert covered.fetchone() == (0,)
+
+
 @pytest.mark.filterwarnings("ignore:the best transformation")
 def test_with_geog_on_a_column() -> None:
     bdf = column_model(COLUMN_FOOTPRINT)
@@ -720,10 +797,14 @@ def test_with_geog_on_a_column() -> None:
     got = coordinates(geog)
     assert np.abs(got[:, :2] - expected[:, :2]).max() < 1e-9
     assert np.abs(got[:, 2] - expected[:, 2]).max() < 1e-6
-    assert abs(got[0, 0] - SIXTY5_LON_LAT[0]) < 0.002 and abs(got[0, 1] - SIXTY5_LON_LAT[1]) < 0.002
-    # A second call replaces the column where it is
+    # Independently of pyproj's choice of operation: the corner (10, 20) mm lies 2 cm from the
+    # site origin, so it is within 1e-4 degrees (10 m) of the origin's known position whether
+    # PROJ runs the Helmert or RDNAPTRANS2018, and not if it ran the null-shift ballpark
+    assert np.abs(got[0, :2] - SIXTY5_LON_LAT).max() < 1e-4
+    # A second call replaces the column where it is; simple_features drops it instead
     assert with_geog(placed).frame.columns == frame.columns
     assert with_geog(placed).frame["geog"].equals(frame["geog"])
+    assert "geog" not in simple_features(placed).frame.columns
     # An empty footprint gives an empty geog, not a null one
     empty = with_geog(column_model(shapely.from_wkt("POLYGON Z EMPTY"))).frame["geog"]
     assert empty.null_count() == 3

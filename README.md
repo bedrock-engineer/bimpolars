@@ -143,8 +143,8 @@ geographic = to_crs(site, "OGC:CRS84h")  # the whole model in lon, lat, ellipsoi
 from bimpolars.geobim import with_geog
 
 site = with_geog(site)  # + geog: the footprints in OGC:CRS84h, next to the site's own
-site.write_parquet("sixty5.parquet")  # GeoParquet with geog as the primary geometry
-geopandas.read_parquet("sixty5.parquet", columns=["id", "class", "geog"]).to_json()  # GeoJSON
+site.write_parquet("sixty5_geog.parquet")  # GeoParquet with geog as the primary geometry
+geopandas.read_parquet("sixty5_geog.parquet", columns=["id", "class", "geog"]).to_json()  # GeoJSON
 ```
 
 - `derived_engineering_crs(base_crs, easting, northing, orthometric_height, rotation, *, unit, name)`:
