@@ -27,9 +27,12 @@ from it, and `mesh_arrays`, which reads a `mesh` column back into flat arrays wi
   pass. Tests that read a model of hundreds of MB are marked `slow` and run only with
   `uv run pytest -m slow`.
 - Typed code with Google-style docstrings (ruff enforces `D` with the google convention).
-- The core imports neither pyproj nor specklepy. pyproj lives in `bimpolars.geobim` behind
-  the extra `[geobim]` (#6) and specklepy in `bimpolars.bundle` behind `[speckle]` (#10),
-  while `bimpolars.speckle` (#9) reads v3 objects as plain JSON.
+- The core imports neither ifcopenshell, pyproj nor specklepy. ifcopenshell lives in
+  `bimpolars.ifc` behind the extra `[ifc]`, which `bimpolars.__getattr__` imports when
+  `read_ifc` is first looked up (keep it out of the other modules' imports); pyproj lives in
+  `bimpolars.geobim` behind the extra `[geobim]` (#6) and specklepy in `bimpolars.bundle`
+  behind `[speckle]` (#10), while `bimpolars.speckle` (#9) reads v3 objects as plain JSON.
+  `tests/test_ifc_synthetic.py::test_the_core_imports_without_ifcopenshell`,
   `tests/test_geobim.py::test_the_core_imports_without_pyproj` and
   `tests/test_speckle.py::test_the_core_imports_without_specklepy` import the core in a
   subprocess with `sys.modules[...] = None` to keep it that way. CRSs are PROJJSON dicts

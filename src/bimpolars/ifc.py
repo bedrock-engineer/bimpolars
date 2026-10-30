@@ -8,15 +8,21 @@ import warnings
 from collections.abc import Iterator, Sequence
 from typing import Any, cast
 
-import ifcopenshell
-import ifcopenshell.geom
-import ifcopenshell.util.element
-import ifcopenshell.util.placement
-import ifcopenshell.util.unit
 import numpy as np
 import polars as pl
 import shapely
 import shapely.affinity
+
+try:
+    import ifcopenshell
+    import ifcopenshell.geom
+    import ifcopenshell.util.element
+    import ifcopenshell.util.placement
+    import ifcopenshell.util.unit
+except ImportError as error:
+    raise ImportError(
+        "bimpolars.ifc needs ifcopenshell: install the extra bimpolars[ifc]"
+    ) from error
 
 from bimpolars.crs import LinearUnit, engineering_crs
 from bimpolars.frame import NATIVE_GEOM_DTYPE, BimDataFrame

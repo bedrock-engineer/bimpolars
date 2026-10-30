@@ -51,12 +51,14 @@ geopandas.read_parquet("sixty5.parquet", columns=["id", "class", "footprint"]).c
 
 ```sh
 uv add bimpolars  # or: pip install bimpolars
+uv add "bimpolars[ifc]"  # with ifcopenshell, for read_ifc
 uv add "bimpolars[geobim]"  # with pyproj, for georeferencing
 uv add "bimpolars[speckle]"  # with specklepy, for Speckle bundles
 ```
 
-The core depends on polars, numpy, shapely and ifcopenshell. Georeferencing (pyproj) is the
-extra `[geobim]`. Reading a Speckle version from its v3 objects needs no specklepy; projecting
+The core depends on polars, numpy and shapely. Reading IFC (ifcopenshell) is the extra `[ifc]`:
+`import bimpolars` does not import ifcopenshell, `bimpolars.read_ifc` does on first use.
+Georeferencing (pyproj) is the extra `[geobim]`. Reading a Speckle version from its v3 objects needs no specklepy; projecting
 a Speckle bundle to those objects does, and is the extra `[speckle]` (see [Speckle](#speckle)).
 
 ## Functions

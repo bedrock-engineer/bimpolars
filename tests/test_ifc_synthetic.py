@@ -20,6 +20,7 @@ import shapely
 
 from bimpolars import BimDataFrame, LinearUnit, linear_unit, read_ifc
 from bimpolars.ifc import _items, _profile_outline
+from tests.synthetic import run_without
 
 
 @pytest.fixture(scope="module")
@@ -179,3 +180,22 @@ def test_booleans_keep_what_is_part_of_the_element() -> None:
     ]
     # A union gives both operands, a clipping or an intersection its first, flagged clipped
     assert found == [("a", False), ("b", True), ("c", True)]
+
+
+def test_the_core_imports_without_ifcopenshell() -> None:
+    lines = run_without(
+        "ifcopenshell",
+        "import bimpolars\n"
+        "import bimpolars.data, bimpolars.features, bimpolars.geoparquet, bimpolars.gltf\n"
+        "import bimpolars.speckle\n"
+        "print(bimpolars.read_speckle.__module__)\n"
+        "try:\n"
+        "    bimpolars.read_ifc\n"
+        "except ImportError as error:\n"
+        "    print(error)\n",
+    )
+    assert lines == [
+        "bimpolars.speckle",
+        "bimpolars.ifc needs ifcopenshell: install the extra bimpolars[ifc]",
+    ]
+    assert read_ifc.__module__ == "bimpolars.ifc"

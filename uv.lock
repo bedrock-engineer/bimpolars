@@ -112,7 +112,6 @@ wheels = [
 name = "bimpolars"
 source = { editable = "." }
 dependencies = [
-    { name = "ifcopenshell" },
     { name = "numpy" },
     { name = "polars" },
     { name = "shapely" },
@@ -122,6 +121,9 @@ dependencies = [
 geobim = [
     { name = "pyproj" },
 ]
+ifc = [
+    { name = "ifcopenshell" },
+]
 speckle = [
     { name = "specklepy", extra = ["bundle"] },
 ]
@@ -130,6 +132,7 @@ speckle = [
 dev = [
     { name = "duckdb" },
     { name = "geopandas" },
+    { name = "ifcopenshell" },
     { name = "mypy" },
     { name = "pyarrow" },
     { name = "pyproj" },
@@ -142,19 +145,20 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ifcopenshell", specifier = ">=0.9.0" },
+    { name = "ifcopenshell", marker = "extra == 'ifc'", specifier = ">=0.9.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "polars", specifier = ">=2.0" },
     { name = "pyproj", marker = "extra == 'geobim'", specifier = ">=3.7" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "specklepy", extras = ["bundle"], marker = "extra == 'speckle'", specifier = "==2026.9.1" },
 ]
-provides-extras = ["geobim", "speckle"]
+provides-extras = ["geobim", "ifc", "speckle"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "duckdb", specifier = ">=1.1" },
     { name = "geopandas", specifier = ">=1.0" },
+    { name = "ifcopenshell", specifier = ">=0.9.0" },
     { name = "mypy", specifier = ">=1.14" },
     { name = "pyarrow", specifier = ">=16" },
     { name = "pyproj", specifier = ">=3.7" },
