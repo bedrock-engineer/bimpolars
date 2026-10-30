@@ -55,8 +55,8 @@ jobs:
       # cdn.proj.org, so that PDOK's 3D BAG stands on the map
       - run: just site
         env:
-          # Over the title in specklestuff's site/.env
-          VITE_SITE_TITLE: "bimpolars: polars dataframes for BIM-data"
+          # bimpolars' header: specklestuff's site/intro/bimpolars.html
+          SITE: bimpolars
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
