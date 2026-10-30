@@ -187,6 +187,10 @@ from it, and `mesh_arrays`, which reads a `mesh` column back into flat arrays wi
   the `mesh` column as it is, indexed, without normals. The tests read the glb back with
   trimesh (dev dependency) and with a small reader of the chunks and accessors.
 - Keep the README's function list current when a public function is added.
+- The Pages site (`.github/workflows/pages.yml`) is specklestuff's demo page (its `site/`),
+  built from specklestuff's main with that repository's lock of bimpolars, so it shows the
+  same page as specklestuff's Pages; nothing of it lives here. A page of bimpolars' own, or one
+  built from this repository's main, needs that workflow to change.
 
 ## Test data
 
