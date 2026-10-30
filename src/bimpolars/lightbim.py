@@ -15,8 +15,9 @@ footprint, in the three columns of :data:`LIGHTBIM_COLUMNS`:
   caller's expression; ``class``, the table :data:`CLASSES`; ``shape``, the box test),
   ``source``, what placed the reduction (``extrusion`` from ``native_geom``, with
   ``, cuts ignored`` when the source clipped the sweep, or ``mesh``), and ``deviation``, the
-  farthest any vertex of the mesh lies from the reduction's axis or plane, in CRS units: the
-  half-width of a member's section, the half-thickness of a slab, the height of a footing.
+  farthest any vertex of the mesh lies from the reduction's axis or plane, in CRS units: half
+  the diagonal of a curve member's section, the half-thickness of a slab, the height of a
+  footing above its bearing level, a mass's farthest vertex from its centre of gravity's height.
 
 The member comes from, in order: the ``kind`` expression the caller passes, the class table
 (IFC classes with their predefined type, and Revit categories), then the shape: the tightest
@@ -164,9 +165,10 @@ A None field is undecided and falls through: a ``role`` to the orientation of th
 axis), ``load_bearing`` to the ``LoadBearing`` property (IFC) or the ``Structural`` parameter
 (Revit). A None entry is a class that is no member at all (an opening's void, a space;
 reinforcement, connections and stiffeners, which an analysis model carries in its sections):
-its rows get null LightBIM columns. A ``support`` whose shape is a vertical line
-(a pile exported as a footing) becomes a ``curve`` with the role ``pile``. Edit the dict, or
-pass ``kind`` to :func:`lightbim_features`, to change the table.
+its rows get null LightBIM columns. A ``support`` from this table whose shape is a vertical
+line (a pile exported as a footing) becomes a ``curve`` with the role ``pile``; a support the
+``kind`` expression gives stays one. Edit the dict, or pass ``kind`` to
+:func:`lightbim_features`, to change the table.
 """
 
 
@@ -175,15 +177,19 @@ def lightbim_features(bdf: BimDataFrame, *, kind: pl.Expr | None = None) -> pl.D
 
     Args:
         bdf: A BimDataFrame with ``class``, ``mesh``, ``bbox`` and the ``footprint`` of
-            :func:`bimpolars.simple_features`. ``properties`` (for ``LoadBearing``,
-            ``Structural`` and the IFC ``PredefinedType``) and ``native_geom``
-            (:data:`bimpolars.NATIVE_GEOM_DTYPE`) are used when present.
+            :func:`bimpolars.simple_features`. ``properties`` and ``native_geom``
+            (:data:`bimpolars.NATIVE_GEOM_DTYPE`) are used when present. Keep the
+            ``properties`` sets ``attributes`` (the IFC ``PredefinedType``, which the class
+            table keys rafts on: without it an ``IfcSlab.BASESLAB`` is a floor), the
+            ``Pset_*Common`` sets (``LoadBearing``) and Revit's ``Structural`` parameter when
+            slimming a frame: without them ``load_bearing`` is the table's or null.
         kind: An expression over the frame that decides the kind of a row ahead of the class
             table and the shape test. It evaluates to a Struct with any of the fields
             ``member``, ``role`` and ``load_bearing``, or to a String ``member``; a null
             field falls through to the next rule, so an expression can set the kind of a
             few rows (``pl.when(...).then(pl.lit({"member": "curve", "role": "beam"}))``)
-            or the role of all walls.
+            or the role of all walls. A member that differs from the table's drops the
+            table's role: the orientation decides it (a curve or a surface) or it stays null.
 
     Returns:
         A frame with the columns of :data:`LIGHTBIM_COLUMNS`, one row per row of ``bdf``:
@@ -295,8 +301,9 @@ def _reduce(
         box = _tightest_box(vertices)
         member, axis = _shape(box)
         shape_line = _Line(box.centre, axis)
-    elif member == "support":
-        # A pile exported as a footing: a support whose shape is a vertical line
+    elif member == "support" and rule == "class":
+        # A pile exported as a footing: a support whose shape is a vertical line. A support
+        # the caller's kind gives stays one (a tall pedestal)
         box = _tightest_box(vertices)
         shape_member, axis = _shape(box)
         if shape_member == "curve" and abs(axis[2]) >= _COS_UPRIGHT:
@@ -346,9 +353,13 @@ def _decide(frame: pl.DataFrame, kind: pl.Expr | None) -> pl.DataFrame:
     override = _override(frame, kind)
     table = _table(frame)
     sourced = _load_bearing(frame)
+    member = pl.coalesce("kind_member", "class_member")
     return pl.concat([override, table, sourced.to_frame()], how="horizontal").select(
-        member=pl.coalesce("kind_member", "class_member"),
-        role=pl.coalesce("kind_role", "class_role"),
+        member=member,
+        # The table's role belongs to the table's member: a curve slab or a mass wall has none
+        role=pl.coalesce(
+            "kind_role", pl.when(member == pl.col("class_member")).then(pl.col("class_role"))
+        ),
         load_bearing=pl.coalesce("kind_load_bearing", "sourced", "class_load_bearing"),
         rule=pl.when(pl.col("kind_member").is_not_null())
         .then(pl.lit("kind"))
@@ -460,25 +471,29 @@ def _predefined_type(frame: pl.DataFrame) -> pl.Series | None:
 
 
 def _load_bearing(frame: pl.DataFrame) -> pl.Series:
-    """Whether the source says a row bears load: IFC ``LoadBearing``, Revit ``Structural``."""
-    candidates: list[pl.Series] = []
+    """Whether the source says a row bears load: IFC ``LoadBearing``, Revit ``Structural``.
+
+    The first set that says it wins, in this order: the ``LoadBearing`` of the IFC ``Pset_``
+    sets (``Pset_WallCommon``), the ``LoadBearing`` of any other set (ArchiCAD and Revit
+    exports carry their own), then Revit's ``Structural`` parameter.
+    """
+    candidates: list[tuple[int, pl.Series]] = []
     if "properties" in frame.columns and isinstance(frame.schema["properties"], pl.Struct):
         properties = frame["properties"]
         for field in frame.schema["properties"].fields:
             if not isinstance(field.dtype, pl.Struct):
                 continue
             names = field.dtype.to_schema()
+            values = properties.struct.field(field.name)
             if "LoadBearing" in names:
-                candidates.append(
-                    _as_boolean(properties.struct.field(field.name).struct.field("LoadBearing"))
-                )
+                rank = 0 if field.name.startswith("Pset_") else 1
+                candidates.append((rank, _as_boolean(values.struct.field("LoadBearing"))))
             elif "Structural" in names and field.name.endswith("Structural"):
-                candidates.append(
-                    _as_boolean(properties.struct.field(field.name).struct.field("Structural"))
-                )
+                candidates.append((2, _as_boolean(values.struct.field("Structural"))))
+    candidates.sort(key=lambda candidate: candidate[0])  # stable: Struct order within a rank
     if not candidates:
         return pl.Series("sourced", [None] * len(frame), dtype=pl.Boolean)
-    return pl.DataFrame({f"c{i}": c for i, c in enumerate(candidates)}).select(
+    return pl.DataFrame({f"c{i}": c for i, (_, c) in enumerate(candidates)}).select(
         sourced=pl.coalesce(pl.all())
     )["sourced"]
 
@@ -711,7 +726,12 @@ def _surface(
 
 
 def _centre_of_gravity(vertices: _Floats, faces: npt.NDArray[np.int64]) -> _Floats:
-    """The centre of gravity of a closed mesh (divergence theorem); the box centre otherwise."""
+    """The centre of gravity of a closed mesh (divergence theorem); the box centre otherwise.
+
+    An open or inconsistently wound mesh (a planting, a railing of loose panels) can still
+    enclose a signed volume, around a centre that lies outside the mesh: a centre outside the
+    box around the vertices falls back to the box centre too.
+    """
     low, high = vertices.min(axis=0), vertices.max(axis=0)
     box_centre = (low + high) / 2
     if len(faces) == 0:
@@ -722,7 +742,10 @@ def _centre_of_gravity(vertices: _Floats, faces: npt.NDArray[np.int64]) -> _Floa
     if abs(volume) <= 1e-6 * float(np.prod(np.maximum(high - low, 1e-300))):
         return np.asarray(box_centre)
     moment = (tetrahedra[:, None] * (a + b + c) / 4).sum(axis=0)
-    return np.asarray(box_centre + moment / volume)
+    centre = box_centre + moment / volume
+    if (np.abs(centre - box_centre) > (high - low) / 2).any():
+        return np.asarray(box_centre)
+    return np.asarray(centre)
 
 
 def _role_from_orientation(member: str, axis: _Floats) -> str | None:

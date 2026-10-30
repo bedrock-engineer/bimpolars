@@ -59,11 +59,12 @@ def read_ifc(
       for ports, which hang off their element rather than a spatial element.
     - ``elevation``: on storeys, the level in model coordinates; see :func:`_elevations`.
     - ``native_geom``: :data:`bimpolars.NATIVE_GEOM_DTYPE`, the ``IfcExtrudedAreaSolid``
-      items of the Body representation (mapped items resolved; a boolean result reduced to
-      its first operand, flagged ``clipped``), each with its placement in model coordinates,
-      its profile as a 2D polygon, depth and direction. Items of other kinds (breps, revolved
-      or tapered sweeps) and profiles this reader cannot outline are left out, so the list
-      can describe part of a body; null when there is nothing to list. The LightBIM
+      items of the Body representation (mapped items resolved; a difference or intersection
+      reduced to its first operand, flagged ``clipped``; both operands of a union), each with
+      its placement in model coordinates, its profile as a 2D polygon, depth and direction.
+      Items of other kinds (breps, revolved or tapered sweeps) and profiles this reader cannot
+      outline are left out, so the list can describe part of a body; null when there is
+      nothing to list. The LightBIM
       reduction (:func:`bimpolars.simple_features` with ``lightbim=True``) takes the axis or
       midplane of a member from it.
     - ``mesh``: :data:`bimpolars.MESH_DTYPE`, with faces sorted by style. A style is named
@@ -251,8 +252,9 @@ def _body_items(
 ) -> Iterator[tuple[np.ndarray[Any, Any], ifcopenshell.entity_instance, bool]]:
     """Yields the items of a product's Body representation with their placement.
 
-    Mapped items are resolved and boolean results (clippings, CSG) are reduced to their first
-    operand: the solid before anything was cut away.
+    Mapped items are resolved and boolean results are taken apart: a difference (a clipping)
+    or an intersection is reduced to its first operand, the solid before anything was cut
+    away, and a union gives both of its operands.
 
     Yields:
         The matrix from the item's coordinates to model coordinates, the item, and whether a
@@ -270,19 +272,30 @@ def _body_items(
 
 
 def _items(
-    items: Sequence[ifcopenshell.entity_instance], matrix: np.ndarray[Any, Any]
+    items: Sequence[ifcopenshell.entity_instance],
+    matrix: np.ndarray[Any, Any],
+    clipped: bool = False,
 ) -> Iterator[tuple[np.ndarray[Any, Any], ifcopenshell.entity_instance, bool]]:
-    """Yields the solids among representation items, mapped items resolved recursively."""
+    """Yields the solids among representation items, mapped items and booleans resolved.
+
+    A union yields both operands; a difference or an intersection yields its first operand,
+    flagged as clipped, which the operands of a clipped item inherit.
+    """
     for item in items:
         if item.is_a("IfcMappedItem"):
             mapped = matrix @ ifcopenshell.util.placement.get_mappeditem_transformation(item)
-            yield from _items(item.MappingSource.MappedRepresentation.Items, mapped)
+            yield from _items(item.MappingSource.MappedRepresentation.Items, mapped, clipped)
             continue
-        clipped = False
-        while item.is_a("IfcBooleanResult") or item.is_a("IfcCsgSolid"):
-            item = item.FirstOperand if item.is_a("IfcBooleanResult") else item.TreeRootExpression
-            clipped = True
-        yield matrix, item, clipped
+        if item.is_a("IfcCsgSolid"):
+            yield from _items([item.TreeRootExpression], matrix, clipped)
+        elif item.is_a("IfcBooleanResult") and item.Operator == "UNION":
+            yield from _items([item.FirstOperand, item.SecondOperand], matrix, clipped)
+        elif item.is_a("IfcBooleanResult"):
+            # DIFFERENCE (every IfcBooleanClippingResult) or INTERSECTION: the result is part
+            # of the first operand
+            yield from _items([item.FirstOperand], matrix, True)
+        else:
+            yield matrix, item, clipped
 
 
 def _profile_outline(profile: ifcopenshell.entity_instance) -> shapely.Polygon:
@@ -290,7 +303,8 @@ def _profile_outline(profile: ifcopenshell.entity_instance) -> shapely.Polygon:
 
     Args:
         profile: An IfcRectangleProfileDef (hollow included), IfcCircleProfileDef (hollow
-            included), IfcIShapeProfileDef or IfcArbitraryClosedProfileDef (with voids).
+            included), IfcIShapeProfileDef, IfcAsymmetricIShapeProfileDef or
+            IfcArbitraryClosedProfileDef (with voids).
 
     Returns:
         The outline with the profile's own Position applied; voids are holes.
@@ -311,15 +325,22 @@ def _profile_outline(profile: ifcopenshell.entity_instance) -> shapely.Polygon:
         if profile.is_a("IfcCircleHollowProfileDef"):
             inner = shapely.Point(0, 0).buffer(profile.Radius - profile.WallThickness, quad_segs=8)
             outline = shapely.Polygon(outline.exterior, [inner.exterior.coords])
+    elif profile.is_a("IfcAsymmetricIShapeProfileDef"):
+        # IFC2X3 derives it from IfcIShapeProfileDef and names the bottom flange as that does
+        ifc2x3 = profile.is_a("IfcIShapeProfileDef")
+        bottom_width = profile.OverallWidth if ifc2x3 else profile.BottomFlangeWidth
+        bottom = profile.FlangeThickness if ifc2x3 else profile.BottomFlangeThickness
+        outline = _i_shape(
+            bottom_width,
+            profile.TopFlangeWidth,
+            profile.OverallDepth,
+            profile.WebThickness,
+            bottom,
+            profile.TopFlangeThickness or bottom,
+        )
     elif profile.is_a("IfcIShapeProfileDef"):
-        b, h = profile.OverallWidth / 2, profile.OverallDepth / 2
-        w, f = profile.WebThickness / 2, h - profile.FlangeThickness
-        outline = shapely.Polygon(
-            [
-                (-b, -h), (b, -h), (b, -f), (w, -f), (w, f), (b, f),
-                (b, h), (-b, h), (-b, f), (-w, f), (-w, -f), (-b, -f),
-            ]
-        )  # fmt: skip
+        width, flange = profile.OverallWidth, profile.FlangeThickness
+        outline = _i_shape(width, width, profile.OverallDepth, profile.WebThickness, flange, flange)
     elif profile.is_a("IfcArbitraryClosedProfileDef"):
         voids = profile.InnerCurves if profile.is_a("IfcArbitraryProfileDefWithVoids") else ()
         outline = shapely.Polygon(
@@ -334,6 +355,25 @@ def _profile_outline(profile: ifcopenshell.entity_instance) -> shapely.Polygon:
     return shapely.affinity.affine_transform(
         outline, [m[0, 0], m[0, 1], m[1, 0], m[1, 1], m[0, -1], m[1, -1]]
     )
+
+
+def _i_shape(
+    bottom_width: float,
+    top_width: float,
+    depth: float,
+    web: float,
+    bottom_flange: float,
+    top_flange: float,
+) -> shapely.Polygon:
+    """An I-section centred on its bounding box, flanges of their own width and thickness."""
+    b, t, h, w = bottom_width / 2, top_width / 2, depth / 2, web / 2
+    lower, upper = -h + bottom_flange, h - top_flange
+    return shapely.Polygon(
+        [
+            (-b, -h), (b, -h), (b, lower), (w, lower), (w, upper), (t, upper),
+            (t, h), (-t, h), (-t, upper), (-w, upper), (-w, lower), (-b, lower),
+        ]
+    )  # fmt: skip
 
 
 def _curve_points(curve: ifcopenshell.entity_instance) -> list[tuple[float, float]]:

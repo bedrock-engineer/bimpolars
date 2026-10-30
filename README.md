@@ -31,11 +31,11 @@ elements = bdf.frame.filter(pl.col("class") != "IfcOpeningElement")
 bdf = bimpolars.simple_features(bdf.with_frame(elements))
 bdf.frame.schema  # + footprint_ref: String, footprint: Binary (ISO WKB)
 bdf.write_parquet("sixty5.parquet")  # GeoParquet: footprint is the primary geometry
+bimpolars.read_parquet("sixty5.parquet").equals(bdf)  # True, CRS included
 
 # The structural-analysis model: beams and columns as lines, slabs and walls as midplanes
 analysis = bimpolars.simple_features(bdf, lightbim=True)
 analysis.frame.select("id", "lightbim", "lightbim_kind", "lightbim_qa")
-bimpolars.read_parquet("sixty5.parquet").equals(bdf)  # True, CRS included
 
 from pathlib import Path
 
@@ -74,10 +74,11 @@ as the extra `[speckle]`.
     elements, the building for a storey; null for the site, for elements in no container and
     for ports); `elevation`: the storey's level in model coordinates.
   - `native_geom` (`NATIVE_GEOM_DTYPE`): the extruded solids (`IfcExtrudedAreaSolid`) of the
-    body, mapped items resolved, as a list of sweeps: `placement` (a row-major 4x4 matrix from
-    the sweep's coordinates to the model CRS), `profile` (a 2D WKB polygon with its voids),
-    `profile_type`, `profile_name`, `depth`, `direction` and `clipped` (the IFC cut the solid
-    afterwards). Breps and other solids are left out, so a list can describe part of a body;
+    body, mapped items resolved and both operands of a union kept, as a list of sweeps:
+    `placement` (a row-major 4x4 matrix from the sweep's coordinates to the model CRS),
+    `profile` (a 2D WKB polygon with its voids), `profile_type`, `profile_name`, `depth`,
+    `direction` and `clipped` (the IFC cut the solid afterwards, by a difference or an
+    intersection). Breps and other solids are left out, so a list can describe part of a body;
     null when there is no sweep. LightBIM takes a member's axis or midplane from it.
   - `mesh`: `{vertices, faces, styles}` with flat vertices, faces sorted by style, and each
     style's `name`, `rgba` and `face_count`; `bbox`: `{xmin, ymin, zmin, xmax, ymax, zmax}`.
@@ -178,8 +179,10 @@ geog = to_crs(site, "OGC:CRS84h")  # longitude, latitude, ellipsoidal height
   `native_geom` keeps its sweeps only under an affine transformation (to the base CRS of the
   Engineering CRS, for instance): the matrix is composed onto each sweep's `placement`, scale
   included, and the profile and depth stay in the sweep's own unit. A geographic, geocentric or
-  differently projected target nulls it. A derived CRS is passed through its base CRS, because PROJ otherwise applies a
-  3D Helmert transformation to heights still in the site's unit.
+  differently projected target nulls it. `lightbim_qa.deviation`, a length, is scaled by the
+  same matrix into the target's unit (1500 mm becomes 1.5 m in EPSG:7415), and nulled when the
+  transformation is not affine. A derived CRS is passed through its base CRS, because PROJ
+  otherwise applies a 3D Helmert transformation to heights still in the site's unit.
 - `affine_transformation(bdf, crs)`: the 4x4 matrix `to_crs` would apply to a placement, or
   None when the transformation is not affine over the model (within `AFFINE_TOLERANCE`, 1 µm).
 - `linearized_site_to_ecef(crs)`: the 4x4 matrix from site metres to ECEF metres (EPSG:4978),
@@ -246,16 +249,20 @@ bdf.frame.select(
   an upright box and a box along its principal axes, snapped to the model axes within 5
   degrees: a surface when the smallest extent is 4 times smaller than the middle one, else a
   curve when the middle is 4 times smaller than the largest, else a mass). A role the table
-  leaves open (`IfcMember`, Revit `Structural Framing`) follows the angle of the axis;
-  `load_bearing` comes from `Pset_*Common.LoadBearing`, the Revit `Structural` parameter, or
-  the table. Openings, spaces and reinforcement are no members: their columns are null, as
-  they are for rows without a mesh.
+  leaves open (`IfcMember`, Revit `Structural Framing`), or that a `kind` member other than
+  the table's drops, follows the angle of the axis; `load_bearing` comes from the
+  `LoadBearing` of a `Pset_` set (`Pset_WallCommon`), else of any other set, else the Revit
+  `Structural` parameter, else the table. Openings, spaces and reinforcement are no members:
+  their columns are null, as they are for rows without a mesh. The class table and
+  `load_bearing` read `properties`: keep its sets `attributes` and `Pset_*Common` (or Revit's
+  `Structural`) when you slim a large frame, since without `attributes` a base slab is a floor.
 - `lightbim_qa`: `{rule, source, deviation}`. `rule` says what decided the member (`kind`,
   `class` or `shape`), `source` what placed the axis or plane (`extrusion` from `native_geom`,
   `extrusion, cuts ignored` when the IFC clipped the sweep, or `mesh` from the box around it),
   and `deviation` how far, in CRS units, the farthest vertex of the mesh lies from the axis
   (half the section's diagonal) or the plane (half the thickness), or above the bearing level
-  (the height of a footing), or from the centre of gravity's height (a mass).
+  (the height of a footing), or from the centre of gravity's height (a mass; the centre of
+  the box around the mesh when the mesh is not closed).
 
 The axis or the plane comes from the element's largest sweep where `native_geom` has one,
 else from the box; the extent always comes from the mesh, so a clipped beam ends where its

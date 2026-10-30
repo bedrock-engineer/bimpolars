@@ -38,6 +38,7 @@ from bimpolars.geobim import (  # noqa: E402
     to_crs,
 )
 from bimpolars.geoparquet import GEO_METADATA_KEY, geo_metadata  # noqa: E402
+from bimpolars.lightbim import QA_DTYPE  # noqa: E402
 from tests.synthetic import SPATIAL, box, model, sweep, translation  # noqa: E402
 
 
@@ -470,12 +471,18 @@ def native_geom_model() -> BimDataFrame:
     return bdf.with_frame(bdf.frame.with_columns(native))
 
 
+@pytest.mark.filterwarnings("ignore:the best transformation")
 def test_a_non_affine_target_drops_native_geom() -> None:
     bdf = native_geom_model()
     geographic = to_crs(bdf, "OGC:CRS84h")
     assert geographic.frame.schema["native_geom"] == pl.Null
     assert geographic.frame["native_geom"].null_count() == 4
     assert geographic.frame.columns == bdf.frame.columns
+    # A deviation in degrees means nothing: it is nulled, the rest of lightbim_qa stays
+    qa = to_crs(simple_features(bdf, lightbim=True), "OGC:CRS84h").frame["lightbim_qa"]
+    assert qa.dtype == QA_DTYPE and qa.null_count() == 3
+    assert qa.struct.field("deviation").null_count() == 4
+    assert qa[3]["source"] == "extrusion"
     lon, lat, _ = vertices(geographic).T
     assert (abs(lon - 5.46) < 0.01).all() and (abs(lat - 51.45) < 0.01).all()
     assert geographic.crs["type"] == "GeographicCRS"
@@ -514,6 +521,17 @@ def test_an_affine_target_keeps_native_geom() -> None:
     site_first = to_crs(simple_features(bdf, lightbim=True), "EPSG:7415")
     for moved_bdf in (rd_first, site_first):
         assert moved_bdf.frame["lightbim_qa"][3]["source"] == "extrusion"
+    # The deviation is a length in the CRS's unit: half the diagonal of the 500 x 800 column,
+    # in millimetres on the site and in metres in RD, whichever was done first (to 10 nm:
+    # pyproj moves the vertices, which the reduction in RD measures, to about 5 nm)
+    site_deviation = simple_features(bdf, lightbim=True).frame["lightbim_qa"][3]["deviation"]
+    assert site_deviation == pytest.approx(math.hypot(250, 400))
+    for moved_bdf in (rd_first, site_first):
+        deviation = moved_bdf.frame["lightbim_qa"].struct.field("deviation")
+        assert deviation[3] == pytest.approx(math.hypot(0.25, 0.4), abs=1e-8)
+        assert deviation.null_count() == 3
+    with pytest.raises(TypeError, match="QA_DTYPE"):
+        to_crs(bdf.with_frame(bdf.frame.with_columns(lightbim_qa=pl.lit(1.0))), "EPSG:7415")
     axis_rd_first = shapely.from_wkb(rd_first.frame["lightbim"][3])
     axis_site_first = shapely.from_wkb(site_first.frame["lightbim"][3])
     assert shapely.get_coordinates(axis_rd_first, include_z=True) == pytest.approx(

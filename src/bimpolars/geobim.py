@@ -38,6 +38,7 @@ from bimpolars.crs import PROJJSON_SCHEMA, LinearUnit, as_linear_unit, linear_un
 from bimpolars.features import _clamp_xy
 from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, NATIVE_GEOM_DTYPE, SWEEP_DTYPE, BimDataFrame
 from bimpolars.geoparquet import GEOMETRY_COLUMNS
+from bimpolars.lightbim import QA_DTYPE
 
 CRSLike = Mapping[str, Any] | pyproj.CRS | str | int
 """A CRS as PROJJSON, a ``pyproj.CRS``, or anything ``pyproj.CRS.from_user_input`` reads."""
@@ -230,8 +231,8 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
 
     One pyproj transformation from the model CRS to ``crs`` moves every coordinate of the
     geometry columns together: the ``mesh`` vertices, the WKB columns of :data:`WKB_COLUMNS`
-    (``footprint``, and ``lightbim`` once bimpolars#11 adds it), and ``elevation``, the level
-    of each storey, taken at the plan centre of the model. ``bbox`` is recomputed from the
+    (``footprint`` and ``lightbim``), and ``elevation``, the level of each storey, taken at
+    the plan centre of the model. ``bbox`` is recomputed from the
     moved meshes; a frame without a ``mesh`` column gets the axis-aligned bounds of the moved
     corners of each box instead, which still covers the moved geometry (loosely, under a
     rotation). The model's length unit becomes the target's: a model in millimetres moved to
@@ -244,7 +245,10 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
     included, so that the profile and the depth stay in the sweep's own coordinates. The
     column is nulled when the transformation is not affine within :data:`AFFINE_TOLERANCE`
     over the model's extent (and at least a kilometre), as it is to a geographic, geocentric
-    or differently projected CRS.
+    or differently projected CRS. ``lightbim_qa.deviation``, a length, follows the change of
+    unit the same way: it is scaled by the matrix's linear scale (the cube root of the
+    determinant of its 3x3 part, exact for the similarity of a derived engineering CRS), and
+    nulled when the transformation is not affine.
 
     The transformation from or to a derived CRS, such as the compound of
     :func:`derived_engineering_crs`, goes through its base CRS, so that PROJ's geodetic steps
@@ -267,9 +271,9 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
         ValueError: If pyproj knows no transformation from the model CRS to ``crs`` (a plain
             EngineeringCRS is not georeferenced: :func:`set_crs` it first), if ``crs`` does
             not have three axes, or if a coordinate does not transform.
-        TypeError: If a column of :data:`WKB_COLUMNS` is not Binary, or ``native_geom`` holds
+        TypeError: If a column of :data:`WKB_COLUMNS` is not Binary, ``native_geom`` holds
             values of another layout than :data:`bimpolars.NATIVE_GEOM_DTYPE` under an affine
-            transformation.
+            transformation, or ``lightbim_qa`` is not :data:`bimpolars.lightbim.QA_DTYPE`.
     """
     transformer, source, target, projjson = _prepare(bdf, crs)
     frame = bdf.frame
@@ -291,8 +295,10 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
             if bbox is not None and "bbox" in frame.columns:
                 moved = _clamp_to_bbox(moved, bbox)
             columns.append(moved)
-    if "native_geom" in frame.columns:
+    matrix: np.ndarray[Any, np.dtype[np.float64]] | None = None
+    if "native_geom" in frame.columns or "lightbim_qa" in frame.columns:
         matrix = _affine_matrix(transformer, source, target, frame)
+    if "native_geom" in frame.columns:
         if matrix is None:
             columns.append(pl.Series("native_geom", [None] * len(frame), dtype=pl.Null))
         elif frame.schema["native_geom"] == NATIVE_GEOM_DTYPE:
@@ -302,7 +308,35 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
                 f"native_geom has the dtype {frame.schema['native_geom']}, not "
                 "bimpolars.NATIVE_GEOM_DTYPE, so to_crs cannot place it"
             )
+    if "lightbim_qa" in frame.columns:
+        columns.append(_scale_deviations(frame["lightbim_qa"], matrix))
     return BimDataFrame(frame.with_columns(columns), projjson)
+
+
+def _scale_deviations(
+    qa: pl.Series, matrix: np.ndarray[Any, np.dtype[np.float64]] | None
+) -> pl.Series:
+    """Moves the ``deviation`` of ``lightbim_qa``, a length, into the target CRS's unit.
+
+    An affine matrix scales a length by the cube root of the determinant of its 3x3 part,
+    exactly for a similarity; without one the deviation is nulled, since a length in degrees
+    means nothing.
+    """
+    if qa.dtype != QA_DTYPE:
+        raise TypeError(
+            f"lightbim_qa has the dtype {qa.dtype}, not bimpolars.lightbim.QA_DTYPE, so to_crs "
+            "cannot scale its deviation"
+        )
+    scale = None if matrix is None else abs(float(np.linalg.det(matrix[:3, :3]))) ** (1 / 3)
+    deviation = pl.col("lightbim_qa").struct.field("deviation")
+    scaled = pl.lit(None, dtype=pl.Float64) if scale is None else deviation * scale
+    return qa.to_frame().select(
+        pl.when(pl.col("lightbim_qa").is_null())
+        .then(None)
+        .otherwise(pl.col("lightbim_qa").struct.with_fields(scaled.alias("deviation")))
+        .cast(QA_DTYPE)
+        .alias("lightbim_qa")
+    )["lightbim_qa"]
 
 
 def _place_sweeps(

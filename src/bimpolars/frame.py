@@ -66,10 +66,10 @@ transformation and the solid's position composed. ``profile`` is the swept area 
 XY plane as a 2D ISO WKB Polygon (the profile's own position applied, voids as holes),
 ``profile_type`` and ``profile_name`` are the source's names for it, and ``depth`` and
 ``direction`` (a unit vector in the sweep's coordinates) are the extrusion. ``clipped`` is
-True when the source cut the solid afterwards (an IfcBooleanResult reduced to its first
-operand), so that the sweep is bigger than the element. The profile and the depth are in the
-sweep's own coordinates: :func:`bimpolars.geobim.to_crs` moves a sweep by composing its
-affine matrix onto ``placement``, scale included.
+True when the source cut the solid afterwards (a difference or intersection reduced to its
+first operand), so that the sweep is bigger than the element; a union lists both operands.
+The profile and the depth are in the sweep's own coordinates: :func:`bimpolars.geobim.to_crs`
+moves a sweep by composing its affine matrix onto ``placement``, scale included.
 """
 
 NATIVE_GEOM_DTYPE = pl.List(SWEEP_DTYPE)

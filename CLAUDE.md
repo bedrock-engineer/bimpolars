@@ -1,22 +1,21 @@
 # bimpolars
 
-Building Information Models in polars DataFrames with geometry columns. A `BimDataFrame` is a
-polars DataFrame with one row per element and one model CRS as PROJJSON (`src/bimpolars/frame.py`).
-Readers fill the columns in `MODEL_COLUMNS`; `read_ifc` (`src/bimpolars/ifc.py`) is the first one.
+Building Information Models in polars DataFrames with geometry columns. A `BimDataFrame` is a polars
+DataFrame with one row per element and one model CRS as PROJJSON (`src/bimpolars/frame.py`). Readers
+fill the columns in `MODEL_COLUMNS`; `read_ifc` (`src/bimpolars/ifc.py`) is the first one.
 `simple_features` (`src/bimpolars/features.py`) adds the `FEATURE_COLUMNS` `footprint_ref` and
 `footprint`, and with `lightbim=True` the `LIGHTBIM_COLUMNS` of `src/bimpolars/lightbim.py`
 (`lightbim`, `lightbim_kind`, `lightbim_qa`); `src/bimpolars/geoparquet.py` builds the `geo`
-metadata that makes the written
-Parquet GeoParquet. `src/bimpolars/geobim.py` (the `[geobim]` extra, pyproj) georeferences a
-model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` and
-`linearized_site_to_ecef`. `src/bimpolars/gltf.py` writes the meshes as binary glTF:
-`element_meshes_glb` (one primitive per style) and `triangles_glb` (any triangles).
-`src/bimpolars/speckle.py` reads a Speckle version from its v3 objects: `version_objects`
-(Parquet or SQLite copy) and `read_speckle` (instances expanded, the bundle's categories,
-parameters and levels joined by applicationId). `src/bimpolars/mesh.py` holds the `Mesh` the
-readers end with, `mesh_frame`, which builds the `mesh` and `bbox` columns from it, and
-`mesh_arrays`, which reads a `mesh` column back into flat arrays with per-row offsets (#18:
-features and lightbim use it; geobim, gltf and speckle still walk the column themselves).
+metadata that makes the written Parquet GeoParquet. `src/bimpolars/geobim.py` (the `[geobim]` extra,
+pyproj) georeferences a model: `derived_engineering_crs`, `set_crs`, `to_crs`,
+`affine_transformation` and `linearized_site_to_ecef`. `src/bimpolars/gltf.py` writes the meshes as
+binary glTF: `element_meshes_glb` (one primitive per style) and `triangles_glb` (any triangles).
+`src/bimpolars/speckle.py` reads a Speckle version from its v3 objects: `version_objects` (Parquet
+or SQLite copy) and `read_speckle` (instances expanded, the bundle's categories, parameters and
+levels joined by applicationId). `src/bimpolars/mesh.py` holds the `Mesh` the readers end with,
+`mesh_frame`, which builds the `mesh` and `bbox` columns from it, and `mesh_arrays`, which reads a
+`mesh` column back into flat arrays with per-row offsets (#18: features and lightbim use it; geobim,
+gltf and speckle still walk the column themselves).
 
 ## Rules
 
@@ -41,7 +40,9 @@ features and lightbim use it; geobim, gltf and speckle still walk the column the
   drops z unless `include_z=True`). It nulls `native_geom` when the transformation is not
   affine over the model, and otherwise composes the 4x4 matrix of `affine_transformation`
   onto each sweep's `placement` (`geobim._place_sweeps`): the matrix carries the unit scale,
-  so the profile and the depth stay in the sweep's own unit. Targets must have three axes
+  so the profile and the depth stay in the sweep's own unit. `lightbim_qa.deviation` is a
+  length: `geobim._scale_deviations` scales it by the matrix's cube-root determinant, or
+  nulls it when there is no matrix. Targets must have three axes
   (`EPSG:7415`, never `EPSG:28992`): the model's unit becomes the target's, and a model stays
   in one unit per axis.
 - PROJ applies the deriving conversion of a DerivedVerticalCRS after the geodetic step of the
@@ -72,25 +73,31 @@ features and lightbim use it; geobim, gltf and speckle still walk the column the
   `ifcopenshell.util.element.get_predefined_type` (the type's, `ObjectType` for USERDEFINED),
   because the LightBIM class table keys `IfcSlab.BASESLAB` (a raft) on it.
 - `native_geom` (`frame.NATIVE_GEOM_DTYPE`, a List of `SWEEP_DTYPE`) holds the
-  `IfcExtrudedAreaSolid` body items `read_ifc` can read: mapped items resolved recursively,
-  `IfcBooleanResult` reduced to its first operand (`clipped`), the profile as 2D ISO WKB in the
-  sweep's XY plane (rectangle and hollow, circle and hollow, I-shape, arbitrary closed with
-  voids; polylines, composite curves, trimmed circles and lines, indexed poly curves; arcs at
-  11.25 degrees as the notebook did), `placement` row-major from sweep to model coordinates.
-  Other items (breps, revolved and tapered sweeps) and profiles it cannot outline are skipped,
-  so a list can cover part of a body; null without any. `read_speckle` leaves it Null.
+  `IfcExtrudedAreaSolid` body items `read_ifc` can read: mapped items resolved recursively, a
+  DIFFERENCE or INTERSECTION `IfcBooleanResult` reduced to its first operand (`clipped`), a
+  UNION to both operands, the profile as 2D ISO WKB in the sweep's XY plane (rectangle and
+  hollow, circle and hollow, I-shape and asymmetric I-shape in IFC2X3's and IFC4's attribute
+  names, arbitrary closed with voids; polylines, composite curves, trimmed circles and lines,
+  indexed poly curves; arcs at 11.25 degrees as the notebook did), `placement` row-major from
+  sweep to model coordinates. Other items (breps, revolved and tapered sweeps) and profiles it
+  cannot outline are skipped, so a list can cover part of a body; null without any.
+  `read_speckle` leaves it Null.
 - LightBIM (`lightbim.lightbim_features`, #11): the member comes from the caller's `kind`
-  expression, then `lightbim.CLASSES` (IFC class, `Class.PREDEFINEDTYPE`, Revit category; a
-  None entry means no member: openings, spaces, reinforcement), then the shape test (tightest
-  of a world box, a plan-PCA upright box and a 3D-PCA box, snapped within 5 degrees; plate
-  test before line test, `SLENDERNESS` 4). The axis or plane comes from the largest sweep of
+  expression, then `lightbim.CLASSES` (IFC class, `Class.PREDEFINEDTYPE`, Revit category; a None
+  entry means no member: openings, spaces, reinforcement), then the shape test (tightest of a
+  world box, a plan-PCA upright box and a 3D-PCA box, snapped within 5 degrees; plate test
+  before line test, `SLENDERNESS` 4). The table's role holds only with the table's member (a
+  `kind` member drops it), and only the table's supports turn into piles by shape: the caller's
+  `kind` always wins. `load_bearing`: `LoadBearing` of a `Pset_` set, then of any set, then
+  Revit's `Structural`, then the table. The axis or plane comes from the largest sweep of
   `native_geom` (curve: the extrusion through the profile centroid, unless the profile is a
   slender side view; surface: the extrusion is the normal when no longer than the profile's
   short side, else the profile's short axis), else from the box; the extent always comes from
-  the mesh (the curve spans the vertices' projection, a surface is `plan_outline` of the mesh
-  in the plane's own coordinates, so walls get holes). A support lies at `bbox.zmin`, a mass
-  at the divergence-theorem centre of gravity. `shapely.area` and `is_valid` are 2D: a wall's
-  vertical polygon has no plan area, so tests measure it in its own plane.
+  the mesh (the curve spans the vertices' projection, a surface is `plan_outline` of the mesh in
+  the plane's own coordinates, so walls get holes). A support lies at `bbox.zmin`, a mass at the
+  divergence-theorem centre of gravity (the box centre when that falls outside the box: open or
+  inside-out meshes, 4 of them on the Revit samples). `shapely.area` and `is_valid` are 2D: a
+  wall's vertical polygon has no plan area, so tests measure it in its own plane.
 - `read_speckle` rows are the objects under the root's `elements` (collections traversed;
   definition content, which specklepy names `def-geo-<geometry index>` and
   `nested-inst-<n>`, left out), keyed by `applicationId` with `-instance-N` stripped, so a
@@ -182,8 +189,9 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   whether null or not), so `read_ifc` peaks near 8 GB and takes two minutes (5.4 minutes in a
   4-CPU cloud container); without that column it needs 2.5 GB and 85 s. `native_geom`: 2694
   sweeps on 2681 rows (all 948 IfcWallStandardCase, 1143 of 4147 IfcCovering; the 6478
-  IfcWall are breps), 1 MB, 12 s of the read; the predefined types 1.3 s. Select the columns you need before filtering such a frame. See #15 before changing
-  the layout of `properties`. Footprints take 40 s once `properties` is dropped: 15,697
+  IfcWall are breps), 1 MB, 12 s of the read; the predefined types 1.3 s. Select the
+  columns you need before filtering such a frame. See #15 before changing the layout of
+  `properties`. Footprints take 40 s once `properties` is dropped: 15,697
   `Polygon Z`, 1063 `MultiPolygon Z`, 3 empty (two 2-triangle railings and a stair landing).
   The sliver rule of `plan_outline` (triangles under 1e-9 of the extent squared are left
   out) decides 25 of these: without it GEOS's robustness fallback leaves hairline gaps in

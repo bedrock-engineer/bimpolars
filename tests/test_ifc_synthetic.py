@@ -13,10 +13,13 @@ import ifcopenshell.api.root
 import ifcopenshell.api.spatial
 import ifcopenshell.api.style
 import ifcopenshell.api.unit
+import numpy as np
 import polars as pl
 import pytest
+import shapely
 
 from bimpolars import BimDataFrame, LinearUnit, linear_unit, read_ifc
+from bimpolars.ifc import _items, _profile_outline
 
 
 @pytest.fixture(scope="module")
@@ -119,3 +122,60 @@ def test_unit_and_properties(synthetic: BimDataFrame) -> None:
     assert synthetic.crs["name"] == "Synthetic model coordinates"
     wall = synthetic.frame.filter(pl.col("name") == "Wall").row(0, named=True)
     assert wall["properties"]["Pset_WallCommon"] == {"LoadBearing": True, "FireRating": "REI60"}
+
+
+def test_an_asymmetric_i_section_has_flanges_of_their_own() -> None:
+    # IFC2X3 derives IfcAsymmetricIShapeProfileDef from IfcIShapeProfileDef, IFC4 does not and
+    # renames the bottom flange: both give a 300 wide bottom flange 20 thick and a 150 wide top
+    # flange 10 thick on a web of 10, 500 deep, centred on the bounding box
+    ifc2x3 = ifcopenshell.file(schema="IFC2X3").create_entity(
+        "IfcAsymmetricIShapeProfileDef",
+        ProfileType="AREA",
+        OverallWidth=300.0,
+        OverallDepth=500.0,
+        WebThickness=10.0,
+        FlangeThickness=20.0,
+        TopFlangeWidth=150.0,
+        TopFlangeThickness=10.0,
+    )
+    ifc4 = ifcopenshell.file(schema="IFC4").create_entity(
+        "IfcAsymmetricIShapeProfileDef",
+        ProfileType="AREA",
+        BottomFlangeWidth=300.0,
+        OverallDepth=500.0,
+        WebThickness=10.0,
+        BottomFlangeThickness=20.0,
+        TopFlangeWidth=150.0,
+        TopFlangeThickness=10.0,
+    )
+    area = 300 * 20 + 150 * 10 + 10 * (500 - 20 - 10)
+    centroid_y = (300 * 20 * -240 + 150 * 10 * 245 + 10 * 470 * 5) / area  # web -230..240
+    for profile in (ifc2x3, ifc4):
+        outline = _profile_outline(profile)
+        assert outline.bounds == (-150, -250, 150, 250)
+        assert outline.area == pytest.approx(area)
+        assert outline.centroid.y == pytest.approx(centroid_y)
+        assert outline.intersection(shapely.box(-200, 240, 200, 250)).area == 150 * 10
+    # Without TopFlangeThickness the top flange is as thick as the bottom one
+    ifc4.TopFlangeThickness = None
+    assert _profile_outline(ifc4).area == pytest.approx(300 * 20 + 150 * 20 + 10 * 460)
+
+
+def test_booleans_keep_what_is_part_of_the_element() -> None:
+    f = ifcopenshell.file(schema="IFC4")
+
+    def solid(name: str) -> ifcopenshell.entity_instance:
+        profile = f.createIfcRectangleProfileDef("AREA", name, None, 1.0, 1.0)
+        return f.create_entity("IfcExtrudedAreaSolid", SweptArea=profile, Depth=1.0)
+
+    a, b, c = solid("a"), solid("b"), solid("c")
+    cut = f.createIfcHalfSpaceSolid(f.createIfcPlane(), False)
+    clipping = f.createIfcBooleanClippingResult("DIFFERENCE", b, cut)
+    union = f.createIfcBooleanResult("UNION", a, clipping)
+    intersection = f.createIfcCsgSolid(f.createIfcBooleanResult("INTERSECTION", c, a))
+    found = [
+        (item.SweptArea.ProfileName, clipped)
+        for _, item, clipped in _items([union, intersection], np.eye(4))
+    ]
+    # A union gives both operands, a clipping or an intersection its first, flagged clipped
+    assert found == [("a", False), ("b", True), ("c", True)]

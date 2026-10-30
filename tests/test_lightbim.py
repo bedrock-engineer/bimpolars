@@ -22,6 +22,7 @@ from bimpolars import (
 from bimpolars.frame import MODEL_COLUMNS
 from bimpolars.geoparquet import GEO_METADATA_KEY
 from bimpolars.lightbim import CLASSES, KIND_DTYPE, LIGHTBIM_DTYPE, QA_DTYPE, Kind
+from bimpolars.mesh import mesh_arrays
 from tests.synthetic import SPATIAL, box, merged, model, rotated_box, sweep, translation
 
 PROXY = "IfcBuildingElementProxy"
@@ -222,6 +223,29 @@ def test_supports_and_masses() -> None:
     assert coordinates(geometry(frame, "pile")).tolist() == [[200, 200, -12_000], [200, 200, 0]]
 
 
+def test_a_mass_whose_mesh_is_not_closed_sits_at_the_centre_of_its_box() -> None:
+    # A box with an inside-out box on top: the signed volume is 1000 x 1000 x (1000 - 800),
+    # around a centre far below the mesh (z = -3100), which falls back to the box centre
+    upper = box(0, 0, 1000, 1000, 1000, 1800)
+    upper["faces"] = np.asarray(upper["faces"]).reshape(-1, 3)[:, ::-1].ravel().tolist()
+    planting = {
+        "id": "planting",
+        "class": PROXY,
+        "mesh": merged(box(0, 0, 0, 1000, 1000, 1000), upper),
+    }
+    closed = {
+        "id": "closed",
+        "class": PROXY,
+        "mesh": merged(box(0, 0, 0, 1000, 1000, 1000), box(0, 0, 1000, 500, 500, 1800)),
+    }
+    frame = reduce([planting, closed])
+    assert frame["member"].to_list() == ["mass", "mass"]
+    assert set(coordinates(geometry(frame, "planting"))[:, 2]) == {900.0}
+    assert row(frame, "planting")["deviation"] == 900.0
+    # A closed mesh keeps its centre of gravity: 1e9 mm3 at z 500 and 0.2e9 at z 1400
+    assert coordinates(geometry(frame, "closed"))[:, 2] == pytest.approx(650.0)
+
+
 def test_the_kind_expression_wins() -> None:
     block = {"id": "block", "class": PROXY, "mesh": box(0, 0, 0, 1000, 800, 600)}
     slab = {"id": "slab", "class": "IfcSlab", "mesh": box(0, 0, 0, 9000, 9000, 250)}
@@ -241,6 +265,22 @@ def test_the_kind_expression_wins() -> None:
     everything_mass = reduce([block, slab], kind=pl.lit("mass"))
     assert everything_mass["member"].to_list() == ["mass", "mass"]
     assert everything_mass["rule"].to_list() == ["kind", "kind"]
+    # A member other than the table's drops the table's role: the slab is no "mass slab", and
+    # as a curve its role follows the orientation of its axis
+    assert everything_mass["role"].to_list() == [None, None]
+    as_curve = reduce([slab], kind=pl.lit("curve"))
+    assert as_curve.select("member", "role", "rule").row(0) == ("curve", "beam", "kind")
+    # A support the kind gives stays one, however slender: a tall pedestal is no pile
+    pedestal = {"id": "pedestal", "class": "IfcFooting", "mesh": box(0, 0, 0, 500, 500, 6000)}
+    proxy = {"id": "proxy", "class": PROXY, "mesh": box(0, 0, 0, 500, 500, 6000)}
+    footing = pl.struct(member=pl.lit("support"), role=pl.lit("footing"))
+    pedestals = reduce([pedestal, proxy], kind=footing)
+    assert pedestals.select("member", "role", "rule").rows() == [
+        ("support", "footing", "kind"),
+        ("support", "footing", "kind"),
+    ]
+    assert set(coordinates(geometry(pedestals, "pedestal"))[:, 2]) == {0.0}
+    assert reduce([pedestal]).select("member", "role", "rule").row(0) == ("curve", "pile", "shape")
     plates = reduce([block, slab], kind=pl.struct(role=pl.lit("plate")))
     assert plates["member"].to_list() == ["mass", "surface"]
     assert plates["role"].to_list() == ["plate", "plate"]
@@ -280,10 +320,18 @@ def test_load_bearing_comes_from_the_properties_else_the_table() -> None:
     }
     column = {"id": "column", "class": "Structural Columns", "container": "storey"}
     column["mesh"] = box(0, 0, 0, 400, 400, 3000)
-    frame = reduce([partition, revit, column])
-    assert frame["load_bearing"].to_list() == [False, True, True]
-    assert frame["member"].to_list() == ["surface", "surface", "curve"]
-    assert frame["role"].to_list() == ["wall", "wall", "column"]
+    # An exporter's own set that disagrees: the Pset_ set wins, whatever the order of the sets
+    # in the properties Struct (the order in which the rows first give them)
+    archicad = {"id": "archicad", "class": "IfcWallStandardCase", "container": "storey"}
+    archicad["mesh"] = box(0, 0, 0, 3000, 200, 2600)
+    archicad["properties"] = {
+        "ArchiCADProperties": {"LoadBearing": "No"},
+        "Pset_WallCommon": {"LoadBearing": True},
+    }
+    frame = reduce([archicad, partition, revit, column])  # ArchiCADProperties comes first
+    assert frame["load_bearing"].to_list() == [True, False, True, True]
+    assert frame["member"].to_list() == ["surface", "surface", "surface", "curve"]
+    assert frame["role"].to_list() == ["wall", "wall", "wall", "column"]
 
 
 def test_a_role_left_open_by_the_table_follows_the_orientation() -> None:
@@ -435,6 +483,22 @@ def test_sixty5_structural_curves_lie_on_their_axis(sixty5_lightbim: BimDataFram
     z_sections = curves.filter(pl.col("class") == "IfcBeam")["name"].str.contains("Z_profiel")
     assert z_sections.sum() == 89
     assert lengths[z_sections.to_numpy()].max() < 424
+    # A beam with a sweep lies on the centroid line of its profile: on the centre of the
+    # section for the rectangles, HEAs and hollow sections, off it by the centroid's offset
+    # for the angles (43 mm for an L200x200x20), the UNPs and the Z sections
+    swept = sixty5_lightbim.frame.filter(
+        (pl.col("class") == "IfcBeam")
+        & pl.col("lightbim_qa").struct.field("source").str.starts_with("extrusion")
+    )
+    assert len(swept) == 350
+    for wkb, sweeps in zip(swept["lightbim"], swept["native_geom"], strict=True):
+        start, end = coordinates(shapely.from_wkb(wkb))
+        sweep = max(sweeps, key=lambda s: shapely.from_wkb(s["profile"]).area * s["depth"])
+        centroid = shapely.from_wkb(sweep["profile"]).centroid
+        point = (np.array(sweep["placement"]).reshape(4, 4) @ [centroid.x, centroid.y, 0, 1])[:3]
+        axis = (end - start) / np.linalg.norm(end - start)
+        relative = point - start
+        assert np.linalg.norm(relative - (relative @ axis) * axis) < 1e-6
 
 
 def test_sixty5_structural_surfaces_and_supports(sixty5_lightbim: BimDataFrame) -> None:
@@ -453,14 +517,19 @@ def test_sixty5_structural_surfaces_and_supports(sixty5_lightbim: BimDataFrame) 
         assert geom.area == pytest.approx(footprint.area, rel=1e-9)
     walls = frame.filter(pl.col("role") == "wall")
     box = walls["bbox"].struct.unnest()
-    for geom, zmin, zmax in zip(
-        shapely.from_wkb(walls["lightbim"].to_numpy()), box["zmin"], box["zmax"], strict=True
+    meshes = mesh_arrays(
+        sixty5_lightbim.frame.filter(pl.col("lightbim_kind").struct.field("role") == "wall")["mesh"]
+    )
+    for i, (geom, zmin, zmax) in enumerate(
+        zip(shapely.from_wkb(walls["lightbim"].to_numpy()), box["zmin"], box["zmax"], strict=True)
     ):
         xyz = coordinates(geom)
-        # The plan coordinates lie on one line: the wall's midline
-        plan = xyz[:, :2] - xyz[:, :2].mean(axis=0)
-        singular = np.linalg.svd(plan, compute_uv=False)
+        # The plan coordinates lie on one line: the wall's midline, halfway through the wall
+        centre = xyz[:, :2].mean(axis=0)
+        _, singular, axes = np.linalg.svd(xyz[:, :2] - centre, full_matrices=False)
         assert singular[1] < 1e-6 * singular[0]
+        depth = (meshes.row(i)[0][:, :2] - centre) @ axes[1]
+        assert abs(depth.max() + depth.min()) < 1e-6
         assert xyz[:, 2].min() == pytest.approx(zmin) and xyz[:, 2].max() == pytest.approx(zmax)
     supports = frame.filter(pl.col("member") == "support")
     box = supports["bbox"].struct.unnest()
