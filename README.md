@@ -152,7 +152,13 @@ crs = derived_engineering_crs(
 site = set_crs(bdf, crs)  # the same geometry, now a georeferenced Engineering CRS
 rd = to_crs(site, "EPSG:7415")  # meshes, footprints, bbox and storey levels in RD New + NAP metres
 rd.write_parquet("sixty5_rd.parquet")  # GeoParquet with EPSG:7415
-geog = to_crs(site, "OGC:CRS84h")  # longitude, latitude, ellipsoidal height
+geographic = to_crs(site, "OGC:CRS84h")  # the whole model in lon, lat, ellipsoidal height
+
+from bimpolars.geobim import with_geog
+
+site = with_geog(site)  # + geog: the footprints in OGC:CRS84h, next to the site's own
+site.write_parquet("sixty5_geog.parquet")  # GeoParquet with geog as the primary geometry
+geopandas.read_parquet("sixty5_geog.parquet", columns=["id", "class", "geog"]).to_json()  # GeoJSON
 ```
 
 - `derived_engineering_crs(base_crs, easting, northing, orthometric_height, rotation, *, unit, name)`:
@@ -177,6 +183,16 @@ geog = to_crs(site, "OGC:CRS84h")  # longitude, latitude, ellipsoidal height
   the Engineering CRS, for instance); a geographic, geocentric or differently projected target
   nulls it. A derived CRS is passed through its base CRS, because PROJ otherwise applies a
   3D Helmert transformation to heights still in the site's unit.
+- `with_geog(bdf)`: adds `geog`, the `footprint` of every row in OGC:CRS84h (longitude and
+  latitude in degrees, ellipsoidal height in metres on WGS 84: `bimpolars.crs.CRS84H`), as
+  ISO WKB, null exactly when `footprint` is. That is the CRS GeoJSON means by its coordinates,
+  so the column exports to GeoJSON as it is (`GeoDataFrame.to_json()`, `shapely.to_geojson`,
+  DuckDB's `ST_AsGeoJSON`), and the written GeoParquet takes it as the primary geometry (see
+  [GeoParquet](#geoparquet)). The model keeps its own CRS and `footprint`, and `to_crs` never
+  moves `geog`. A model in a plain EngineeringCRS raises: `set_crs` it first. GDAL's WKT1
+  cannot say a 3D geographic CRS, so `GeoDataFrame.to_file` (pyogrio) refuses the column's
+  CRS; label the frame `OGC:CRS84` first (`gdf.set_crs("OGC:CRS84", allow_override=True)`),
+  which keeps the heights.
 - `affine_transformation(bdf, crs)`: the 4x4 matrix `to_crs` would apply to a placement, or
   None when the transformation is not affine over the model (within `AFFINE_TOLERANCE`, 1 µm).
 - `linearized_site_to_ecef(crs)`: the 4x4 matrix from site metres to ECEF metres (EPSG:4978),
@@ -190,18 +206,23 @@ transformation that is good to about a metre, and passes NAP heights off as elli
 
 ## GeoParquet
 
-`write_parquet` on a frame with a `footprint` column writes
+`write_parquet` on a frame with a `geog` or `footprint` column writes
 [GeoParquet 1.1](https://geoparquet.org): the file metadata gets a `geo` entry
-(`bimpolars.geoparquet.geo_metadata`) with `footprint` as the primary geometry column, WKB
-encoded, its geometry types and the model CRS as PROJJSON. When the frame has its `bbox`
-column, the entry also names that column as the *covering* of the footprints: a pointer that
-tells a reader that each row's footprint lies within `bbox.xmin..xmax` and `bbox.ymin..ymax`,
-so that a spatial filter can skip row groups. A GeoParquet covering has those four slots and
-no z; the `bbox` column itself keeps all six fields. The entry's own bounding box, one for the
-whole file, is x and y only for another reason: the footprints lie flat at their storey's
-elevation, which is often outside the mesh's `zmin..zmax`, so the mesh's z range would not
-contain them. Readers that understand GeoParquet then find the footprints with their CRS, and
-can skip row groups with the bbox:
+(`bimpolars.geoparquet.geo_metadata`) that lists each of them WKB encoded with its geometry
+types and its CRS as PROJJSON: `footprint` in the model CRS, `geog` in OGC:CRS84h. The first
+one present is the primary geometry column (`bimpolars.geoparquet.GEOMETRY_COLUMNS`): `geog`
+when `with_geog` added it, so that a reader that takes the primary column has longitude and
+latitude, else `footprint`. When the frame has its `bbox` column, the entry also names that
+column as the *covering* of the footprints: a pointer that tells a reader that each row's
+footprint lies within `bbox.xmin..xmax` and `bbox.ymin..ymax`, so that a spatial filter can
+skip row groups. A GeoParquet covering has those four slots and no z; the `bbox` column itself
+keeps all six fields. The entry's own bounding box, one for the whole file, is x and y only
+for another reason: the footprints lie flat at their storey's elevation, which is often
+outside the mesh's `zmin..zmax`, so the mesh's z range would not contain them. `geog` is in
+degrees, which `bbox` does not cover, so its entry gets the bounds of its own coordinates and
+no covering (`geopandas.read_parquet(..., bbox=...)` filters on the primary column's covering
+and refuses a file whose primary column has none). Readers that understand GeoParquet then
+find the footprints with their CRS, and can skip row groups with the bbox:
 
 ```python
 geopandas.read_parquet("sixty5.parquet", columns=["id", "footprint"], bbox=(0, 0, 10_000, 10_000))
