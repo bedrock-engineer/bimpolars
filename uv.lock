@@ -101,6 +101,7 @@ dev = [
     { name = "pyproj" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "trimesh" },
     { name = "types-shapely" },
 ]
 
@@ -123,6 +124,7 @@ dev = [
     { name = "pyproj", specifier = ">=3.7" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "ruff", specifier = ">=0.9" },
+    { name = "trimesh", specifier = ">=4.0" },
     { name = "types-shapely", specifier = ">=2.0" },
 ]
 
@@ -893,6 +895,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
+]
+
+[[package]]
+name = "trimesh"
+version = "5.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/77/8a/0798e6cd28e2d1c6a7dfc97ba8eb27f7da5f392a5c81147d4f1e41ce0c1b/trimesh-5.2.0.tar.gz", hash = "sha256:d0a845d058e5a4ff145d0f0082d80c58d761687ce389c79d422dbe774966957b", size = 880133, upload-time = "2026-10-24T01:10:30.021Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/14/78624d9c89bab76c2a2e1e839c7641fa686828c2c1c8fb64aedf3b371a5d/trimesh-5.2.0-py3-none-any.whl", hash = "sha256:04db2c7ec62afdd7763fb04c82bb5f257ddd984993a19ee83697f475fc58fd29", size = 751459, upload-time = "2026-10-24T01:10:27.874Z" },
 ]
 
 [[package]]

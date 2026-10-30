@@ -37,6 +37,7 @@ dev = [
     "pyproj>=3.7",
     "pytest>=8.3",
     "ruff>=0.9",
+    "trimesh>=4.0",
     "types-shapely>=2.0",
 ]
 

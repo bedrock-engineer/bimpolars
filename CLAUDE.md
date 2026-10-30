@@ -7,7 +7,8 @@ Readers fill the columns in `MODEL_COLUMNS`; `read_ifc` (`src/bimpolars/ifc.py`)
 `footprint`; `src/bimpolars/geoparquet.py` builds the `geo` metadata that makes the written
 Parquet GeoParquet. `src/bimpolars/geobim.py` (the `[geobim]` extra, pyproj) georeferences a
 model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` and
-`linearized_site_to_ecef`.
+`linearized_site_to_ecef`. `src/bimpolars/gltf.py` writes the meshes as binary glTF:
+`element_meshes_glb` (one primitive per style) and `triangles_glb` (any triangles).
 
 ## Rules
 
@@ -66,6 +67,18 @@ model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` a
   footprint flat at its storey's elevation often lies outside of; the column keeps all six.
 - A row's `footprint` is null exactly when its `mesh` is null; a mesh without plan area gets
   `POLYGON Z EMPTY`. The footprint's bounds stay inside the row's `bbox`.
+- glTF (`gltf.py`) is hand-written glb 2.0, no glTF library in the core: vertices in metres
+  (scaled by the CRS unit) and z up in the accessors, a root node with `Y_UP_ROTATION` (named
+  after the CRS; `extras.crs` is the model CRS in its own unit and `extras.unit` says the data
+  is in metres) that makes the scene y-up as the spec wants, and a child node translated to
+  the centre of the written vertices' bounding box (not the `bbox` column: openings and
+  meshless rows are left out) holding the mesh so that float32 stays precise far from the
+  origin. One primitive and material per `(name, rgba)` style, sorted by name with
+  the unstyled last; `IfcOpeningElement` rows left out. `normals=True` (default) writes
+  non-indexed triangles with flat normals (3 vertices per face: ifcopenshell welds vertices
+  by position, so averaged vertex normals would shade a box smooth); `normals=False` writes
+  the `mesh` column as it is, indexed, without normals. The tests read the glb back with
+  trimesh (dev dependency) and with a small reader of the chunks and accessors.
 - Keep the README's function list current when a public function is added.
 
 ## Test data
@@ -94,7 +107,10 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   `to_crs` to EPSG:7415 takes 0.2 s and puts the model within 100 m of the origin between NAP
   -11.8 and +75.3 m, the 146 pile heads (tip + Depth along the extrusion, as in
   `sixty5_piles.py`) within 0.2 mm in plan of the centre of their moved `bbox` and at its
-  `zmax`.
+  `zmax`. glTF: the 1363 element rows that are not openings hold 89,740 vertices, 177,130
+  faces and 12 distinct `(name, rgba)` styles, so `element_meshes_glb` writes 12 primitives
+  with 531,390 flat-shaded vertices (12.8 MB, 0.6 s; 89,740 vertices and 3.2 MB with
+  `normals=False`).
 - `sixty5_O-S1-BWK-BIM-prefab-facade.ifc`: 1055 elements, 18 storeys; 1054 `Polygon Z` + 1
   `MultiPolygon Z` (a console whose two parts touch along an edge, up to rounding).
 - `sixty5_O-S1-BWK-BIM-architectural.ifc`: 343 MB, `slow`. ArchiCAD export: 16,784 products
