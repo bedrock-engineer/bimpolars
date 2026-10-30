@@ -36,6 +36,10 @@ Tests that read a model of hundreds of MB are marked `slow` and run only with
   `tests/test_ifc_synthetic.py::test_the_core_imports_without_ifcopenshell`,
   `tests/test_geobim.py::test_the_core_imports_without_pyproj` and
   `tests/test_speckle.py::test_the_core_imports_without_specklepy`.
+- The Pages site (`.github/workflows/pages.yml`) is specklestuff's demo page (its `site/`),
+  built from specklestuff's main with that repository's lock of bimpolars, so it shows the
+  same page as specklestuff's Pages; nothing of it lives here. A page of bimpolars' own, or one
+  built from this repository's main, needs that workflow to change.
 
 ## Docs
 
