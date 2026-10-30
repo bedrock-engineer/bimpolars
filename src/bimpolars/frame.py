@@ -46,6 +46,36 @@ BBOX_DTYPE = pl.Struct(
 )
 """The axis-aligned bounding box of a mesh, in model coordinates."""
 
+SWEEP_DTYPE = pl.Struct(
+    {
+        "type": pl.String,
+        "placement": pl.Array(pl.Float64, 16),
+        "profile": pl.Binary,
+        "profile_type": pl.String,
+        "profile_name": pl.String,
+        "depth": pl.Float64,
+        "direction": pl.Array(pl.Float64, 3),
+        "clipped": pl.Boolean,
+    }
+)
+"""One swept solid of an element's native geometry, as a reader found it in the source.
+
+``type`` names the solid (``IfcExtrudedAreaSolid``). ``placement`` is the row-major 4x4 matrix
+from the sweep's own coordinates to the model CRS: the element's placement, the mapped item's
+transformation and the solid's position composed. ``profile`` is the swept area in the sweep's
+XY plane as a 2D ISO WKB Polygon (the profile's own position applied, voids as holes),
+``profile_type`` and ``profile_name`` are the source's names for it, and ``depth`` and
+``direction`` (a unit vector in the sweep's coordinates) are the extrusion. ``clipped`` is
+True when the source cut the solid afterwards (a difference or intersection reduced to its
+first operand), so that the sweep is bigger than the element; a union lists both operands.
+The profile and the depth are in the sweep's own coordinates: :func:`bimpolars.geobim.to_crs`
+moves a sweep by composing its affine matrix onto ``placement``, scale included.
+"""
+
+NATIVE_GEOM_DTYPE = pl.List(SWEEP_DTYPE)
+"""The ``native_geom`` column once a reader fills it: the sweeps of an element's body that
+it could read, in the source's order; null for a row whose body has none."""
+
 MODEL_COLUMNS: tuple[str, ...] = (
     "id",
     "name",

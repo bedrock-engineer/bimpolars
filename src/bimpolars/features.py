@@ -9,6 +9,8 @@ that the frame writes as GeoParquet (see :mod:`bimpolars.geoparquet`).
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import polars as pl
 import shapely
@@ -16,6 +18,7 @@ import shapely.errors
 
 from bimpolars.frame import BimDataFrame
 from bimpolars.geoparquet import GEOG_COLUMN
+from bimpolars.mesh import mesh_arrays
 
 FOOTPRINT_DTYPE = pl.Binary
 """The dtype of the ``footprint`` column: ISO WKB with Z coordinates."""
@@ -30,8 +33,10 @@ _SLIVER = 1e-9
 a sliver (a face that is vertical up to rounding) and is left out of the outline."""
 
 
-def simple_features(bdf: BimDataFrame, *, lightbim: bool = False) -> BimDataFrame:
-    """Adds the plan footprint of every element with a mesh.
+def simple_features(
+    bdf: BimDataFrame, *, lightbim: bool = False, kind: pl.Expr | None = None
+) -> BimDataFrame:
+    """Adds the plan footprint of every element with a mesh, and the LightBIM reduction.
 
     Two columns are added (or replaced):
 
@@ -46,27 +51,35 @@ def simple_features(bdf: BimDataFrame, *, lightbim: bool = False) -> BimDataFram
       ``container`` when that has an ``elevation`` (the storey, for most elements), otherwise
       the row itself, at the lowest z of its mesh. Null without a mesh.
 
+    With ``lightbim=True`` the three columns of :data:`bimpolars.lightbim.LIGHTBIM_COLUMNS`
+    follow: ``lightbim``, the structural-analysis reduction of every member (the axis of a
+    beam, the midplane of a wall, the bearing plane of a footing), ``lightbim_kind``, what
+    the member is, and ``lightbim_qa``, how that was decided and how far the mesh reaches
+    from the reduction. See :func:`bimpolars.lightbim.lightbim_features`.
+
     A ``geog`` column (the footprints in OGC:CRS84h of :func:`bimpolars.geobim.with_geog`) is
     dropped, since it was the previous footprint's: run ``with_geog`` again on the result.
 
     Args:
         bdf: A BimDataFrame with the ``id``, ``container``, ``elevation``, ``mesh`` and
-            ``bbox`` columns a reader fills.
-        lightbim: Reserved for the LightBIM reduction of bimpolars#11; only ``False`` works.
+            ``bbox`` columns a reader fills; ``class``, ``properties`` and ``native_geom``
+            inform the LightBIM reduction when present.
+        lightbim: Whether to add the LightBIM columns.
+        kind: With ``lightbim``, an expression that decides the kind of a row ahead of the
+            class table and the shape test; see :func:`bimpolars.lightbim.lightbim_features`.
 
     Returns:
-        The BimDataFrame with the two columns appended (and ``geog`` dropped), in the same
-        CRS.
+        The BimDataFrame with the columns appended (and ``geog`` dropped), in the same CRS.
 
     Raises:
         ValueError: If a required column is missing, ``id`` is not unique, or a row's
             ``container`` has no row in the frame: a frame filtered down to its elements
             has lost the storeys that place the footprints, so it is refused rather than
-            silently outlined at every element's own level.
-        NotImplementedError: If ``lightbim`` is True.
+            silently outlined at every element's own level. Also when ``kind`` is given
+            without ``lightbim``.
     """
-    if lightbim:
-        raise NotImplementedError("the LightBIM features are not implemented yet (bimpolars#11)")
+    if kind is not None and not lightbim:
+        raise ValueError("kind decides the LightBIM kind: pass lightbim=True with it")
     frame = bdf.frame
     missing = [column for column in _REQUIRED_COLUMNS if column not in frame.columns]
     if missing:
@@ -83,9 +96,13 @@ def simple_features(bdf: BimDataFrame, *, lightbim: bool = False) -> BimDataFram
         )
     ref = _footprint_ref(frame)
     footprints = _footprints(frame["mesh"], ref["z"])
-    return bdf.with_frame(
-        frame.drop(GEOG_COLUMN, strict=False).with_columns(ref["footprint_ref"], footprints)
-    )
+    frame = frame.drop(GEOG_COLUMN, strict=False).with_columns(ref["footprint_ref"], footprints)
+    if lightbim:
+        # Imported here: bimpolars.lightbim builds on plan_outline below
+        from bimpolars.lightbim import lightbim_features
+
+        frame = frame.with_columns(lightbim_features(bdf.with_frame(frame), kind=kind))
+    return bdf.with_frame(frame)
 
 
 def _footprint_ref(frame: pl.DataFrame) -> pl.DataFrame:
@@ -110,20 +127,10 @@ def _footprint_ref(frame: pl.DataFrame) -> pl.DataFrame:
 
 def _footprints(mesh: pl.Series, z: pl.Series) -> pl.Series:
     """The ``footprint`` column: the plan outline of every mesh, flat at ``z``, as WKB."""
-    vertices = mesh.struct.field("vertices")
-    faces = mesh.struct.field("faces")
-    vertex_counts = (vertices.list.len().fill_null(0) // 3).cast(pl.Int64).to_numpy()
-    face_counts = (faces.list.len().fill_null(0) // 3).cast(pl.Int64).to_numpy()
-    all_vertices = vertices.explode().drop_nulls().to_numpy().reshape(-1, 3)
-    all_faces = faces.explode().drop_nulls().to_numpy().astype(np.int64).reshape(-1, 3)
-    vertex_offsets = np.concatenate([[0], np.cumsum(vertex_counts)])
-    face_offsets = np.concatenate([[0], np.cumsum(face_counts)])
-
+    arrays = mesh_arrays(mesh)
     outlines = np.full(len(mesh), None, dtype=object)
-    for row in np.flatnonzero(mesh.is_not_null().to_numpy()):
-        row_vertices = all_vertices[vertex_offsets[row] : vertex_offsets[row + 1]]
-        row_faces = all_faces[face_offsets[row] : face_offsets[row + 1]]
-        outlines[row] = plan_outline(row_vertices, row_faces)
+    for row in arrays.present:
+        outlines[row] = plan_outline(*arrays.row(row))
     heights = z.fill_null(0.0).cast(pl.Float64).to_numpy()
     wkb = shapely.to_wkb(shapely.force_3d(outlines, z=heights), flavor="iso")
     return pl.Series("footprint", wkb.tolist(), dtype=FOOTPRINT_DTYPE)
@@ -191,3 +198,31 @@ def _clamp(geometry: shapely.Geometry, low: np.ndarray, high: np.ndarray) -> sha
     if (bounds[:2] >= low).all() and (bounds[2:] <= high).all():
         return geometry
     return shapely.transform(geometry, lambda xy: np.clip(xy, low, high))
+
+
+def _clamp_xy(
+    geometry: shapely.Geometry, low: np.ndarray[Any, Any], high: np.ndarray[Any, Any]
+) -> shapely.Geometry:
+    """Moves the x and y of a 3D geometry's coordinates outside a box onto its edge; z stays.
+
+    ``shapely.transform`` drops z unless ``include_z=True``, which is why this is not
+    :func:`_clamp`.
+
+    Args:
+        geometry: A geometry with z coordinates.
+        low: The box's minimum x and y.
+        high: The box's maximum x and y.
+
+    Returns:
+        The geometry itself when its bounds are inside the box, else a clamped copy.
+    """
+    if shapely.is_empty(geometry):
+        return geometry
+    bounds = shapely.bounds(geometry)
+    if (bounds[:2] >= low).all() and (bounds[2:] <= high).all():
+        return geometry
+
+    def clip(coordinates: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
+        return np.column_stack([np.clip(coordinates[:, :2], low, high), coordinates[:, 2:]])
+
+    return shapely.transform(geometry, clip, include_z=True)

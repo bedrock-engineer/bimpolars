@@ -16,6 +16,10 @@ import numpy as np
 import polars as pl
 from polars.datatypes import DataTypeClass
 
+ATTRIBUTES_PSET = "attributes"
+"""The property set a reader fills with an entity's own attributes that name its kind: for
+IFC, ``PredefinedType`` (the element's or its type's, ``ObjectType`` when USERDEFINED)."""
+
 type Kind = tuple[bool, str | None]
 """How a value is typed: whether it is a list, and the scalar kind of it or of its items."""
 

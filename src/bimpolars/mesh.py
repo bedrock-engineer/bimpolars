@@ -3,7 +3,8 @@
 Every reader ends with one :class:`Mesh` per row that has geometry: flat vertices, faces sorted
 by style and the styles themselves. :func:`mesh_frame` turns those into the ``mesh``
 (:data:`bimpolars.MESH_DTYPE`) and ``bbox`` (:data:`bimpolars.BBOX_DTYPE`) columns without
-boxing every coordinate into a Python object.
+boxing every coordinate into a Python object, and :func:`mesh_arrays` reads a ``mesh`` column
+back into flat arrays the same way, for the functions that walk the meshes row by row.
 """
 
 from __future__ import annotations
@@ -96,6 +97,61 @@ def styled_mesh(
         np.ascontiguousarray(vertices, dtype=np.float64).ravel(),
         faces[order].astype(np.uint32).ravel(),
         style_rows,
+    )
+
+
+class MeshArrays(NamedTuple):
+    """The vertices and faces of a ``mesh`` column as flat arrays, with per-row offsets.
+
+    Attributes:
+        vertices: All vertices, ``(n, 3)`` float64, row after row.
+        faces: All faces, ``(m, 3)`` int64, row after row, with indices local to their row.
+        vertex_offsets: ``len(column) + 1`` offsets into ``vertices``: row ``i`` owns
+            ``vertices[vertex_offsets[i]:vertex_offsets[i + 1]]``.
+        face_offsets: The same for ``faces``.
+        present: The indices of the rows that have a mesh.
+    """
+
+    vertices: np.ndarray[Any, np.dtype[np.float64]]
+    faces: np.ndarray[Any, np.dtype[np.int64]]
+    vertex_offsets: np.ndarray[Any, np.dtype[np.int64]]
+    face_offsets: np.ndarray[Any, np.dtype[np.int64]]
+    present: np.ndarray[Any, np.dtype[np.int64]]
+
+    def row(self, index: int) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
+        """The ``(vertices, faces)`` of one row, as views into the flat arrays."""
+        return (
+            self.vertices[self.vertex_offsets[index] : self.vertex_offsets[index + 1]],
+            self.faces[self.face_offsets[index] : self.face_offsets[index + 1]],
+        )
+
+
+def mesh_arrays(mesh: pl.Series) -> MeshArrays:
+    """Reads a ``mesh`` column into flat numpy arrays without boxing a coordinate.
+
+    Args:
+        mesh: A column of :data:`bimpolars.MESH_DTYPE`, nulls allowed.
+
+    Returns:
+        The arrays and the offsets that slice them per row; see :class:`MeshArrays`.
+
+    Raises:
+        ValueError: If a mesh has null coordinates or indices.
+    """
+    vertices = mesh.struct.field("vertices")
+    faces = mesh.struct.field("faces")
+    vertex_counts = (vertices.list.len().fill_null(0) // 3).cast(pl.Int64).to_numpy()
+    face_counts = (faces.list.len().fill_null(0) // 3).cast(pl.Int64).to_numpy()
+    all_vertices = vertices.explode().drop_nulls().to_numpy()
+    all_faces = faces.explode().drop_nulls().to_numpy()
+    if len(all_vertices) != 3 * vertex_counts.sum() or len(all_faces) != 3 * face_counts.sum():
+        raise ValueError("a mesh has null vertex coordinates or face indices")
+    return MeshArrays(
+        np.ascontiguousarray(all_vertices, dtype=np.float64).reshape(-1, 3),
+        all_faces.astype(np.int64).reshape(-1, 3),
+        np.concatenate([[0], np.cumsum(vertex_counts)]),
+        np.concatenate([[0], np.cumsum(face_counts)]),
+        np.flatnonzero(mesh.is_not_null().to_numpy()),
     )
 
 

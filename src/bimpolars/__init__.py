@@ -10,9 +10,18 @@ that :meth:`BimDataFrame.write_parquet` wrote.
 
 from bimpolars.crs import LinearUnit, engineering_crs, linear_unit
 from bimpolars.features import FEATURE_COLUMNS, FOOTPRINT_DTYPE, plan_outline, simple_features
-from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, STYLE_DTYPE, BimDataFrame, read_parquet
+from bimpolars.frame import (
+    BBOX_DTYPE,
+    MESH_DTYPE,
+    NATIVE_GEOM_DTYPE,
+    STYLE_DTYPE,
+    SWEEP_DTYPE,
+    BimDataFrame,
+    read_parquet,
+)
 from bimpolars.gltf import element_meshes_glb, triangles_glb
 from bimpolars.ifc import read_ifc
+from bimpolars.lightbim import LIGHTBIM_COLUMNS
 from bimpolars.properties import properties_series
 from bimpolars.speckle import read_speckle, version_objects
 
@@ -22,8 +31,11 @@ __all__ = [
     "BBOX_DTYPE",
     "FEATURE_COLUMNS",
     "FOOTPRINT_DTYPE",
+    "LIGHTBIM_COLUMNS",
     "MESH_DTYPE",
+    "NATIVE_GEOM_DTYPE",
     "STYLE_DTYPE",
+    "SWEEP_DTYPE",
     "BimDataFrame",
     "LinearUnit",
     "element_meshes_glb",

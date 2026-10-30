@@ -171,8 +171,8 @@ def test_simple_features_drops_a_stale_geog() -> None:
 
 def test_simple_features_checks_its_input() -> None:
     bdf = model(SPATIAL)
-    with pytest.raises(NotImplementedError, match="11"):
-        simple_features(bdf, lightbim=True)
+    with pytest.raises(ValueError, match="lightbim=True"):
+        simple_features(bdf, kind=pl.lit("mass"))
     with pytest.raises(ValueError, match="bbox"):
         simple_features(bdf.with_frame(bdf.frame.drop("bbox")))
     duplicated = bdf.with_frame(pl.concat([bdf.frame, bdf.frame]))

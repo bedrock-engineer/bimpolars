@@ -35,12 +35,14 @@ GEOPARQUET_VERSION = "1.1.0"
 GEOG_COLUMN = "geog"
 """The column of :func:`bimpolars.geobim.with_geog`: the footprints in OGC:CRS84h."""
 
-GEOMETRY_COLUMNS: tuple[str, ...] = (GEOG_COLUMN, "footprint")
+GEOMETRY_COLUMNS: tuple[str, ...] = (GEOG_COLUMN, "footprint", "lightbim")
 """The WKB geometry columns a BimDataFrame can hold; the first one present is the primary.
 
 ``geog`` (the footprints in OGC:CRS84h, from :func:`bimpolars.geobim.with_geog`) comes before
 ``footprint`` (in the model CRS, from :func:`bimpolars.simple_features`): a reader that takes
 the primary column then has longitude and latitude, which export to GeoJSON as they are.
+``lightbim`` (in the model CRS, the structural-analysis reduction of
+:func:`bimpolars.simple_features` with ``lightbim=True``) comes last.
 """
 
 COLUMN_CRS: dict[str, dict[str, Any]] = {GEOG_COLUMN: CRS84H}

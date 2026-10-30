@@ -1,22 +1,24 @@
 # bimpolars
 
-Building Information Models in polars DataFrames with geometry columns. A `BimDataFrame` is a
-polars DataFrame with one row per element and one model CRS as PROJJSON (`src/bimpolars/frame.py`).
-Readers fill the columns in `MODEL_COLUMNS`; `read_ifc` (`src/bimpolars/ifc.py`) is the first one.
+Building Information Models in polars DataFrames with geometry columns. A `BimDataFrame` is a polars
+DataFrame with one row per element and one model CRS as PROJJSON (`src/bimpolars/frame.py`). Readers
+fill the columns in `MODEL_COLUMNS`; `read_ifc` (`src/bimpolars/ifc.py`) is the first one.
 `simple_features` (`src/bimpolars/features.py`) adds the `FEATURE_COLUMNS` `footprint_ref` and
-`footprint`; `src/bimpolars/geoparquet.py` builds the `geo` metadata that makes the written
-Parquet GeoParquet. `src/bimpolars/geobim.py` (the `[geobim]` extra, pyproj) georeferences a
-model: `derived_engineering_crs`, `set_crs`, `to_crs`, `with_geog` (the `geog` column: the
-footprints in OGC:CRS84h), `affine_transformation` and `linearized_site_to_ecef`.
-`src/bimpolars/gltf.py` writes the meshes as binary glTF:
+`footprint`, and with `lightbim=True` the `LIGHTBIM_COLUMNS` of `src/bimpolars/lightbim.py`
+(`lightbim`, `lightbim_kind`, `lightbim_qa`); `src/bimpolars/geoparquet.py` builds the `geo`
+metadata that makes the written Parquet GeoParquet. `src/bimpolars/geobim.py` (the `[geobim]` extra,
+pyproj) georeferences a model: `derived_engineering_crs`, `set_crs`, `to_crs`, `with_geog` (the
+`geog` column: the footprints in OGC:CRS84h), `affine_transformation` and
+`linearized_site_to_ecef`. `src/bimpolars/gltf.py` writes the meshes as binary glTF:
 `element_meshes_glb` (one primitive per style) and `triangles_glb` (any triangles).
-`src/bimpolars/speckle.py` reads a Speckle version from its v3 objects: `version_objects`
-(Parquet or SQLite copy) and `read_speckle` (instances expanded, the bundle's categories,
-parameters and levels joined by applicationId). `src/bimpolars/bundle.py` (the `[speckle]`
-extra, specklepy) projects a bundle on disk, or in the bucket, to those objects:
-`bundle_model` and `bundle_objects`. `src/bimpolars/mesh.py` holds the `Mesh` the
-readers end with, `Style`, `styled_mesh` (faces sorted by style) and `mesh_frame`, which builds
-the `mesh` and `bbox` columns from it.
+`src/bimpolars/speckle.py` reads a Speckle version from its v3 objects: `version_objects` (Parquet
+or SQLite copy) and `read_speckle` (instances expanded, the bundle's categories, parameters and
+levels joined by applicationId). `src/bimpolars/bundle.py` (the `[speckle]` extra, specklepy)
+projects a bundle on disk, or in the bucket, to those objects: `bundle_model` and
+`bundle_objects`. `src/bimpolars/mesh.py` holds the `Mesh` the readers end with, `Style`,
+`styled_mesh` (faces sorted by style), `mesh_frame`, which builds the `mesh` and `bbox` columns
+from it, and `mesh_arrays`, which reads a `mesh` column back into flat arrays with per-row offsets
+(#18: features and lightbim use it; geobim, gltf and speckle still walk the column themselves).
 
 ## Rules
 
@@ -33,16 +35,19 @@ the `mesh` and `bbox` columns from it.
   subprocess with `sys.modules[...] = None` to keep it that way. CRSs are PROJJSON dicts
   (`src/bimpolars/crs.py`) so the core can build and store them without pyproj. shapely is a
   core dependency (the footprints need it).
-- `to_crs` moves `mesh`, the WKB columns of `geobim.WKB_COLUMNS` (`footprint`, `lightbim`
-  once #11 adds it; never `geog`, which is always OGC:CRS84h) and `elevation` (as a point at
-  the plan centre of the model), recomputes `bbox` from the moved meshes (from the eight
-  moved corners of the old `bbox` when the frame has no `mesh` column), and keeps the
-  footprints inside their `bbox` with `geobim._clamp_xy`, which clips x and y and keeps z
-  (`shapely.transform` drops z unless `include_z=True`). It nulls `native_geom` when the
-  transformation is not affine over the model (`affine_transformation` gives the 4x4 matrix
-  when it is; #11 uses it to place its sweeps and replaces the `NotImplementedError` for a
-  filled column). Targets must have three axes (`EPSG:7415`, never `EPSG:28992`): the model's
-  unit becomes the target's, and a model stays in one unit per axis.
+- `to_crs` moves `mesh`, the WKB columns of `geobim.WKB_COLUMNS` (`footprint`, `lightbim`;
+  never `geog`, which is always OGC:CRS84h) and `elevation` (as a point at the plan centre of
+  the model), recomputes `bbox` from the moved meshes (from the eight moved corners of the
+  old `bbox` when the frame has no `mesh` column), and keeps the WKB columns inside their
+  `bbox` with `features._clamp_xy`, which clips x and y and keeps z (`shapely.transform`
+  drops z unless `include_z=True`). It nulls `native_geom` when the transformation is not
+  affine over the model, and otherwise composes the 4x4 matrix of `affine_transformation`
+  onto each sweep's `placement` (`geobim._place_sweeps`): the matrix carries the unit scale,
+  so the profile and the depth stay in the sweep's own unit. `lightbim_qa.deviation` is a
+  length: `geobim._scale_deviations` scales it by the matrix's cube-root determinant, or
+  nulls it when there is no matrix. Targets must have three axes
+  (`EPSG:7415`, never `EPSG:28992`): the model's unit becomes the target's, and a model stays
+  in one unit per axis.
 - PROJ applies the deriving conversion of a DerivedVerticalCRS after the geodetic step of the
   horizontal part, so a 3D Helmert transformation (the fallback without grids) reads a
   millimetre site's heights as metres: 0.7 m of horizontal error at 50 m height, and an ECEF
@@ -66,7 +71,36 @@ the `mesh` and `bbox` columns from it.
   than silently placing the footprint at the element's own level. `container` is null for
   `IfcDistributionPort` rows (ports hang off their element, not a spatial element).
 - The inference of property dtypes across rows lives in `src/bimpolars/properties.py`
-  (`properties_series`); `read_ifc` and `read_speckle` both use it.
+  (`properties_series`); `read_ifc` and `read_speckle` both use it. `read_ifc` adds the set
+  `properties.ATTRIBUTES_PSET` (`attributes`) with the `PredefinedType` of
+  `ifcopenshell.util.element.get_predefined_type` (the type's, `ObjectType` for USERDEFINED),
+  because the LightBIM class table keys `IfcSlab.BASESLAB` (a raft) on it.
+- `native_geom` (`frame.NATIVE_GEOM_DTYPE`, a List of `SWEEP_DTYPE`) holds the
+  `IfcExtrudedAreaSolid` body items `read_ifc` can read: mapped items resolved recursively, a
+  DIFFERENCE or INTERSECTION `IfcBooleanResult` reduced to its first operand (`clipped`), a
+  UNION to both operands, the profile as 2D ISO WKB in the sweep's XY plane (rectangle and
+  hollow, circle and hollow, I-shape and asymmetric I-shape in IFC2X3's and IFC4's attribute
+  names, arbitrary closed with voids; polylines, composite curves, trimmed circles and lines,
+  indexed poly curves; arcs at 11.25 degrees as the notebook did), `placement` row-major from
+  sweep to model coordinates. Other items (breps, revolved and tapered sweeps) and profiles it
+  cannot outline are skipped, so a list can cover part of a body; null without any.
+  `read_speckle` leaves it Null.
+- LightBIM (`lightbim.lightbim_features`, #11): the member comes from the caller's `kind`
+  expression, then `lightbim.CLASSES` (IFC class, `Class.PREDEFINEDTYPE`, Revit category; a None
+  entry means no member: openings, spaces, reinforcement), then the shape test (tightest of a
+  world box, a plan-PCA upright box and a 3D-PCA box, snapped within 5 degrees; plate test
+  before line test, `SLENDERNESS` 4). The table's role holds only with the table's member (a
+  `kind` member drops it), and only the table's supports turn into piles by shape: the caller's
+  `kind` always wins. `load_bearing`: `LoadBearing` of a `Pset_` set, then of any set, then
+  Revit's `Structural`, then the table. The axis or plane comes from the largest sweep of
+  `native_geom` (curve: the extrusion through the profile centroid, unless the profile is a
+  slender side view; surface: the extrusion is the normal when no longer than the profile's
+  short side, else the profile's short axis), else from the box; the extent always comes from
+  the mesh (the curve spans the vertices' projection, a surface is `plan_outline` of the mesh in
+  the plane's own coordinates, so walls get holes). A support lies at `bbox.zmin`, a mass at the
+  divergence-theorem centre of gravity (the box centre when that falls outside the box: open or
+  inside-out meshes, 4 of them on the Revit samples). `shapely.area` and `is_valid` are 2D: a
+  wall's vertical polygon has no plan area, so tests measure it in its own plane.
 - `read_speckle` rows are the objects under the root's `elements` (collections traversed;
   definition content, which specklepy names `def-geo-<geometry index>` and
   `nested-inst-<n>`, left out), keyed by `applicationId` with `-instance-N` stripped, so a
@@ -115,10 +149,10 @@ the `mesh` and `bbox` columns from it.
   mesh of 720 faces does: `e1d4bdfb-2688-47c1-a386-3b48116e5fd2-0008cb48`, pinned in
   `test_mep`) with `grid_size` = the sliver fraction times the extent, which is the
   fixed-precision overlay that cannot fail.
-- Simple-feature columns (`footprint`, `geog` and later the LightBIM geometry) are ISO WKB with
+- Simple-feature columns (`footprint`, `geog` and the LightBIM geometry `lightbim`) are ISO WKB with
   Z in a `Binary` column, so that GeoParquet readers (DuckDB spatial, geopandas, GDAL) take them
   as they are; shapely decodes them. Meshes stay nested columns. A geometry column that is
-  listed in `geoparquet.GEOMETRY_COLUMNS` (`geog` before `footprint`) gets `geo` metadata on
+  listed in `geoparquet.GEOMETRY_COLUMNS` (`geog`, `footprint`, `lightbim`) gets `geo` metadata on
   write, the first present one as the primary. `bbox` is the covering of the columns in the
   model CRS: the `geo` entry points readers at the column's x and y fields, which every
   footprint lies within, so that a spatial filter can skip row groups. A GeoParquet covering
@@ -181,15 +215,29 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   faces and 12 distinct `(name, rgba)` styles, so `element_meshes_glb` writes 12 primitives
   with 531,390 flat-shaded vertices (12.8 MB, 0.6 s; 89,740 vertices and 3.2 MB with
   `normals=False`).
+  `native_geom`: 2651 sweeps on 2630 rows (beams 350 of 354, columns 379 of 387 through mapped
+  items, walls 296 of 296 + 0 of the 3 brep IfcWalls, slabs 69 of 70, footings 105 of 106 with
+  106 sweeps, piles 146, openings 1284, the origin proxy 21); 31 clipped (11 beams, 20 walls).
+  `attributes.PredefinedType`: slabs 21 BASESLAB + 49 FLOOR. LightBIM (1.3 s after the 4 s of
+  the footprints): 1363 members (the openings, spatial rows and grids are null): 354 beams,
+  387 columns and 146 piles as curves, 49 floors and 299 walls as surfaces (15 walls a
+  MultiPolygon: cut through by an opening), 106 footings and 21 base slabs (rafts) as
+  supports, the origin proxy a mass by shape. Deviations: curves below 700 (piles 300),
+  surfaces 100..255, supports their height. 89 beams are steel Z sections 200..363 mm long
+  extruded along their length with a 424 mm high section. ifcopenshell tessellates the round
+  piles 599.51 x 599.76 mm, so their `bbox` centre is 0.24 mm off the circle's centre.
 - `sixty5_O-S1-BWK-BIM-prefab-facade.ifc`: 1055 elements, 18 storeys; 1054 `Polygon Z` + 1
   `MultiPolygon Z` (a console whose two parts touch along an edge, up to rounding).
 - `sixty5_O-S1-BWK-BIM-architectural.ifc`: 343 MB, `slow`. ArchiCAD export: 16,784 products
   (16,760 with a mesh), 1,671,713 triangles, 191 property sets (one per library part) with
-  35,068 distinct properties. The dense `properties` Struct is 35,068 columns of 16,784 rows,
-  about 5.5 GB in memory (String columns cost 16 bytes per row whether null or not), so
-  `read_ifc` peaks near 8 GB and takes two minutes; without that column it needs 2.5 GB and
-  85 s. Select the columns you need before filtering such a frame. See #15 before changing
-  the layout of `properties`. Footprints take 40 s once `properties` is dropped: 15,697
+  35,068 distinct properties, plus the `attributes` set. The dense `properties` Struct is
+  35,068 columns of 16,784 rows, about 5.5 GB in memory (String columns cost 16 bytes per row
+  whether null or not), so `read_ifc` peaks near 8 GB and takes two minutes (5.4 minutes in a
+  4-CPU cloud container); without that column it needs 2.5 GB and 85 s. `native_geom`: 2694
+  sweeps on 2681 rows (all 948 IfcWallStandardCase, 1143 of 4147 IfcCovering; the 6478
+  IfcWall are breps), 1 MB, 12 s of the read; the predefined types 1.3 s. Select the
+  columns you need before filtering such a frame. See #15 before changing the layout of
+  `properties`. Footprints take 40 s once `properties` is dropped: 15,697
   `Polygon Z`, 1063 `MultiPolygon Z`, 3 empty (two 2-triangle railings and a stair landing).
   The sliver rule of `plan_outline` (triangles under 1e-9 of the extent squared are left
   out) decides 25 of these: without it GEOS's robustness fallback leaves hairline gaps in

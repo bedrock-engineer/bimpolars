@@ -16,7 +16,7 @@ import bimpolars
 bdf = bimpolars.read_ifc("sixty5_O-S1-CON-structural-engineering.ifc")
 bdf.frame.schema
 # id: String, name: String, class: Categorical, properties: Struct, container: String,
-# elevation: Float64, native_geom: Null, mesh: Struct, bbox: Struct
+# elevation: Float64, native_geom: List(Struct), mesh: Struct, bbox: Struct
 
 columns = bdf.frame.filter(pl.col("class") == "IfcColumn")
 columns.select(
@@ -32,6 +32,10 @@ bdf = bimpolars.simple_features(bdf.with_frame(elements))
 bdf.frame.schema  # + footprint_ref: String, footprint: Binary (ISO WKB)
 bdf.write_parquet("sixty5.parquet")  # GeoParquet: footprint is the primary geometry
 bimpolars.read_parquet("sixty5.parquet").equals(bdf)  # True, CRS included
+
+# The structural-analysis model: beams and columns as lines, slabs and walls as midplanes
+analysis = bimpolars.simple_features(bdf, lightbim=True)
+analysis.frame.select("id", "lightbim", "lightbim_kind", "lightbim_qa")
 
 from pathlib import Path
 
@@ -63,14 +67,25 @@ a Speckle bundle to those objects does, and is the extra `[speckle]` (see [Speck
     included: an `IfcOpeningElement` row carries the solid mesh of the void it cuts, so filter
     `class != "IfcOpeningElement"` before outlining or rendering elements.
   - `properties`: a Struct of property and quantity sets (the type's included), each a Struct
-    of values. A property whose type differs between rows becomes a String.
+    of values. A property whose type differs between rows becomes a String. The set
+    `attributes` holds the entity's `PredefinedType` (its type's, or `ObjectType` when it is
+    USERDEFINED), which tells a base slab from a floor.
   - `container`: the `id` of the spatial element the row sits in (the storey for most
     elements, the building for a storey; null for the site, for elements in no container and
     for ports); `elevation`: the storey's level in model coordinates.
-  - `native_geom`: null for now; `mesh`: `{vertices, faces, styles}` with flat vertices, faces
-    sorted by style, and each style's `name`, `rgba` and `face_count`; `bbox`:
-    `{xmin, ymin, zmin, xmax, ymax, zmax}`. Rows without geometry have a null `mesh` and `bbox`.
-- `simple_features(bdf)`: adds the plan footprint of every row with a mesh, in two columns:
+  - `native_geom` (`NATIVE_GEOM_DTYPE`): the extruded solids (`IfcExtrudedAreaSolid`) of the
+    body, mapped items resolved and both operands of a union kept, as a list of sweeps:
+    `placement` (a row-major 4x4 matrix from the sweep's coordinates to the model CRS),
+    `profile` (a 2D WKB polygon with its voids), `profile_type`, `profile_name`, `depth`,
+    `direction` and `clipped` (the IFC cut the solid afterwards, by a difference or an
+    intersection). Breps and other solids are left out, so a list can describe part of a body;
+    null when there is no sweep. LightBIM takes a member's axis or midplane from it.
+  - `mesh`: `{vertices, faces, styles}` with flat vertices, faces sorted by style, and each
+    style's `name`, `rgba` and `face_count`; `bbox`: `{xmin, ymin, zmin, xmax, ymax, zmax}`.
+    Rows without geometry have a null `mesh` and `bbox`.
+- `simple_features(bdf, *, lightbim=False, kind=None)`: adds the plan footprint of every row
+  with a mesh, in two columns, and with `lightbim=True` the three columns of
+  [LightBIM](#lightbim):
   - `footprint`: the outline of the mesh in plan, the union of its triangles projected to the
     XY plane, as `POLYGON Z` or `MULTIPOLYGON Z` in ISO WKB (`Binary`), lying flat at the
     level of the `footprint_ref` row. Holes and separate parts survive. A mesh with no plan
@@ -83,6 +98,8 @@ a Speckle bundle to those objects does, and is the extra `[speckle]` (see [Speck
   Every row's `container` must be in the frame: filter the elements, but keep the spatial
   rows, or `simple_features` raises. Decode the column with
   `shapely.from_wkb(bdf.frame["footprint"].to_numpy())`.
+- `bimpolars.lightbim.lightbim_features(bdf, *, kind=None)`: the LightBIM columns on their own,
+  for a frame that has its footprints. The class table is `bimpolars.lightbim.CLASSES`.
 - `plan_outline(vertices, faces)`: the plan outline of one triangle mesh as a 2D shapely
   Polygon or MultiPolygon, the union of its triangles projected to XY, for a mesh outside a
   frame. Slivers (triangles with less plan area than 1e-9 of the extent squared) are left
@@ -173,16 +190,19 @@ geopandas.read_parquet("sixty5_geog.parquet", columns=["id", "class", "geog"]).t
   as `"EPSG:7415"`) without moving the geometry, like `GeoDataFrame.set_crs`. The CRS must have
   three axes.
 - `to_crs(bdf, crs)`: moves the model to another CRS with one pyproj transformation, like
-  `GeoDataFrame.to_crs`: the `mesh` vertices, the WKB columns in the model CRS (`footprint`,
-  later `lightbim`; never `geog`) and the storey `elevation`s (at the plan centre of the
+  `GeoDataFrame.to_crs`: the `mesh` vertices, the WKB columns in the model CRS (`footprint`
+  and `lightbim`; never `geog`) and the storey `elevation`s (at the plan centre of the
   model) move together, `bbox` is recomputed from the moved meshes (from the moved corners of
   the old `bbox` when the frame has no `mesh` column) and the footprints are kept inside it.
   The target must have three axes, so that the meshes keep one unit per axis: `"EPSG:7415"`,
   not `"EPSG:28992"`.
-  `native_geom` keeps its placement only under an affine transformation (to the base CRS of
-  the Engineering CRS, for instance); a geographic, geocentric or differently projected target
-  nulls it. A derived CRS is passed through its base CRS, because PROJ otherwise applies a
-  3D Helmert transformation to heights still in the site's unit.
+  `native_geom` keeps its sweeps only under an affine transformation (to the base CRS of the
+  Engineering CRS, for instance): the matrix is composed onto each sweep's `placement`, scale
+  included, and the profile and depth stay in the sweep's own unit. A geographic, geocentric or
+  differently projected target nulls it. `lightbim_qa.deviation`, a length, is scaled by the
+  same matrix into the target's unit (1500 mm becomes 1.5 m in EPSG:7415), and nulled when the
+  transformation is not affine. A derived CRS is passed through its base CRS, because PROJ
+  otherwise applies a 3D Helmert transformation to heights still in the site's unit.
 - `with_geog(bdf)`: adds `geog`, the `footprint` of every row in OGC:CRS84h (longitude and
   latitude in degrees, ellipsoidal height in metres on WGS 84: `bimpolars.crs.CRS84H`), as
   ISO WKB, null exactly when `footprint` is. That is the CRS GeoJSON means by its coordinates,
@@ -206,7 +226,7 @@ transformation that is good to about a metre, and passes NAP heights off as elli
 
 ## GeoParquet
 
-`write_parquet` on a frame with a `geog` or `footprint` column writes
+`write_parquet` on a frame with a `geog`, `footprint` or `lightbim` column writes
 [GeoParquet 1.1](https://geoparquet.org): the file metadata gets a `geo` entry
 (`bimpolars.geoparquet.geo_metadata`) that lists each of them WKB encoded with its geometry
 types and its CRS as PROJJSON: `footprint` in the model CRS, `geog` in OGC:CRS84h. The first
@@ -233,7 +253,62 @@ LOAD spatial;  -- DuckDB
 SELECT id, ST_Area(footprint) FROM read_parquet('sixty5.parquet') WHERE bbox.xmax < 10000;
 ```
 
-`mesh` and `native_geom` are not GeoParquet geometries; they share the model CRS implicitly.
+`lightbim` is a GeoParquet geometry column too, listed after `footprint` with the same CRS and
+covering: every reduction lies within its row's `bbox`. `mesh` and `native_geom` are not GeoParquet
+geometries; they share the model CRS implicitly.
+
+## LightBIM
+
+`simple_features(bdf, lightbim=True)` reduces every element the way a structural analysis model
+does, next to its footprint:
+
+```python
+bdf = bimpolars.simple_features(bimpolars.read_ifc("sixty5.ifc"), lightbim=True)
+bdf.frame.select(
+    "name",
+    pl.col("lightbim_kind").struct.unnest(),  # member, role, load_bearing
+    pl.col("lightbim_qa").struct.unnest(),  # rule, source, deviation
+)
+```
+
+- `lightbim`: ISO WKB with Z in the model CRS. The `member` of `lightbim_kind` sets it: a
+  `curve` (beam, column, brace, pile) is a `LINESTRING Z` along its axis, a `surface` (slab,
+  wall, plate, roof) a `POLYGON Z` on its midplane with the holes and parts of its mesh (a wall
+  with windows), a `support` (footing, raft) the footprint at its bearing level (the bottom of
+  the mesh), a `mass` the footprint at the height of its centre of gravity.
+- `lightbim_kind`: `{member, role, load_bearing}` with `member` and `role` Enums. The member
+  comes from, in order: the `kind` expression the caller passes (a Struct of any of the three
+  fields, or a String member, null where it has no say); the class table
+  `bimpolars.lightbim.CLASSES` (IFC classes, with the predefined type where it matters:
+  `IfcSlab.BASESLAB` is a raft, and Revit categories); the shape of the mesh (the tightest of
+  an upright box and a box along its principal axes, snapped to the model axes within 5
+  degrees: a surface when the smallest extent is 4 times smaller than the middle one, else a
+  curve when the middle is 4 times smaller than the largest, else a mass). A role the table
+  leaves open (`IfcMember`, Revit `Structural Framing`), or that a `kind` member other than
+  the table's drops, follows the angle of the axis; `load_bearing` comes from the
+  `LoadBearing` of a `Pset_` set (`Pset_WallCommon`), else of any other set, else the Revit
+  `Structural` parameter, else the table. Openings, spaces and reinforcement are no members:
+  their columns are null, as they are for rows without a mesh. The class table and
+  `load_bearing` read `properties`: keep its sets `attributes` and `Pset_*Common` (or Revit's
+  `Structural`) when you slim a large frame, since without `attributes` a base slab is a floor.
+- `lightbim_qa`: `{rule, source, deviation}`. `rule` says what decided the member (`kind`,
+  `class` or `shape`), `source` what placed the axis or plane (`extrusion` from `native_geom`,
+  `extrusion, cuts ignored` when the IFC clipped the sweep, or `mesh` from the box around it),
+  and `deviation` how far, in CRS units, the farthest vertex of the mesh lies from the axis
+  (half the section's diagonal) or the plane (half the thickness), or above the bearing level
+  (the height of a footing), or from the centre of gravity's height (a mass; the centre of
+  the box around the mesh when the mesh is not closed).
+
+The axis or the plane comes from the element's largest sweep where `native_geom` has one,
+else from the box; the extent always comes from the mesh, so a clipped beam ends where its
+mesh ends. On the Sixty5 structural model every beam, column and pile is a curve on its axis,
+every floor and wall a surface on its midplane, and every footing and base slab a support at
+its bottom; the reduction takes 1.3 s on top of the 4 s of the footprints.
+
+**Known limitations.** One straight axis or one flat plane per element: walls with a bent
+midline (L, T, curved) and folded slabs or curved beams are reduced wrongly
+([bimpolars#3](https://github.com/bedrock-engineer/bimpolars/issues/3)). Only extruded sweeps
+are read from the IFC; other bodies place their axis from the box around the mesh.
 
 ## glTF
 
