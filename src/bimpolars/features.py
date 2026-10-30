@@ -157,7 +157,7 @@ def plan_outline(vertices: np.ndarray, faces: np.ndarray) -> shapely.Geometry:
         outline = shapely.union_all(polygons)
     except shapely.errors.GEOSException:
         # GEOS's floating-point overlay can fail on a mesh of many nearly coincident
-        # triangles (a Speckle stair with 1376 faces does it); its fixed-precision overlay
+        # triangles (a Speckle stair with 720 faces does it); its fixed-precision overlay
         # does not, so the union is retried on a grid as fine as the sliver rule
         outline = shapely.union_all(polygons, grid_size=_SLIVER * extent)
     if outline.geom_type == "GeometryCollection":
