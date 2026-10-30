@@ -88,8 +88,9 @@ the `mesh` and `bbox` columns from it.
   most common, else metres; never the Revit geolocation. No specklepy: the SGEO geometry of a
   bundle is not decoded here (#10).
 - `plan_outline` retries a union that GEOS's floating-point overlay fails on (one MEP stair
-  mesh of 1376 faces does) with `grid_size` = the sliver fraction times the extent, which is
-  the fixed-precision overlay that cannot fail.
+  mesh of 720 faces does: `e1d4bdfb-2688-47c1-a386-3b48116e5fd2-0008cb48`, pinned in
+  `test_mep`) with `grid_size` = the sliver fraction times the extent, which is the
+  fixed-precision overlay that cannot fail.
 - Simple-feature columns (`footprint`, later `geog` and the LightBIM geometry) are ISO WKB with
   Z in a `Binary` column, so that GeoParquet readers (DuckDB spatial, geopandas, GDAL) take them
   as they are; shapely decodes them. Meshes stay nested columns. A geometry column that is
@@ -160,19 +161,32 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
 - `rvt-advanced-sample-arch.ifc`: 5696 elements, 5 storeys; 5734 rows (30 ports with a null
   `container`, 8 spatial), extent x -107,474..211,591, y -53,399..98,364, z -1829..12,485 mm
   in shared coordinates (the survey point), 49 s to read.
-- `rvt-advanced-sample/speckle-v3-objects.parquet` (`data.RVT_SPECKLE_V3_OBJECTS`: arch
-  12,915 objects, str 2291, mep 16,139; each version's root first, all `projected` from the
-  bundles with specklepy 2026.9.1) and the bundles
+- `rvt-advanced-sample/speckle-v3-objects.parquet` (`data.RVT_SPECKLE_V3_OBJECTS`, 16.7 MB,
+  44,452 objects in four versions, each version's root first: arch `d5e5bacdde` 13,194
+  objects, str `b66058b4d1` 5355, mep `4413abe507` 16,173, all `projected` from the bundles
+  with specklepy 2026.9.1 so that an element whose definition is empty carries its own
+  geometry; and `5cb009bb77`, `rvt-advanced-sample-arch.ifc` received by Speckle's IFC
+  importer, 9730 objects in metres without a bundle) and the bundles
   `rvt-advanced-sample/speckle-bundle/<model id>/<version id>/<name>.<table>.parquet`
   (`data.RVT_SPECKLE_ARCH/STR/MEP`, 18 tables each, `data.fetch_bundle`). `read_speckle` with
-  the bundle, all in mm at the project base point: arch 5766 rows = 5761 elements (321 with
-  geometry of their own, 5440 instances, all 5440 with a category; 18 elements have several
-  placements, a stair 22) + 5 levels (0, 3800, 7600, 11,400, 12,000), 5501 meshes, 372,804
-  vertices, 251,301 faces, 41 styles (174,063 faces styled), 96 property sets with 633 fields
-  (7.8 MB), 1.6 s; the IFC export sits 9201.999 mm east and 22,635.061 mm north of it, and
-  after that shift the plan extents agree to the micrometre (z max differs 89 mm: a roof
-  without IFC geometry) and of 5347 elements matched by IfcGUID 85 % agree within 1 mm, 97 %
-  within 10 mm, the worst wall by 430 mm. str: 922 rows (918 + 4 levels), only 77 meshes
-  (841 instances of empty definitions, #10), 34,882 faces, 4 styles. mep: 7298 rows (7294 +
-  4 levels), 6932 meshes, 419,305 faces, 86 sets with 1016 fields (12.4 MB), 3.8 s;
-  `simple_features` 6 s.
+  the bundle, all in mm at the project base point: arch 5877 rows = 5761 elements with an
+  object (396 with geometry of their own, 5365 instances, all with a category from the
+  bundle; 18 elements have several placements, a stair 22) + 111 elements the bundle alone
+  knows (34 curtain walls, 76 room separations, a beam system; null `mesh`) + 5 levels (0,
+  3800, 7600, 11,400, 12,000), 5568 meshes, 376,356 vertices, 253,971 faces, 42 styles
+  (176,733 faces styled), 102 property sets with 656 fields (19 MB), 3 s; the IFC export sits
+  9201.999 mm east and 22,635.061 mm north of it, and after that shift the plan extents agree
+  to the micrometre (z max differs 89 mm: a roof without IFC geometry) and of 5412 elements
+  matched by IfcGUID 85 % agree within 1 mm, 97 % within 10 mm, the worst by 322 mm. Eight
+  parapet walls have both geometry of their own (the body, within 0.5 mm of the IFC) and a
+  placement of a 76-face definition (the cap, a wall sweep, which overruns the body at the
+  corners: the 322 mm); the other 67 arch, all 841 str and all 10 mep elements with own
+  geometry and a placement point at an empty definition, so nothing is counted twice
+  (`test_own_geometry_and_placements`). str: 939 rows (918 with an object, every one with a
+  mesh, + 17 bundle-only + 4 levels), 68,714 faces, 5 styles, 39 sets with 357 fields (2 MB),
+  0.7 s. mep: 8629 rows (7294 + 1331 bundle-only: 1045 wires, 187 circuits, 45 duct systems,
+  33 walls, 8 conduit runs, 6 piping systems, 7 rooms and separations; + 4 levels), 6942
+  meshes, 420,077 faces, 30 styles, 91 sets with 1098 fields (58 MB), 3.4 s;
+  `simple_features` 7 s; six conceptual masses (`Mass`, geometry of their own) lie up to 77 m
+  west and 122 m south of the building, whose other elements span x -19.4..53.1 m, y
+  -13.7..41.9 m.
