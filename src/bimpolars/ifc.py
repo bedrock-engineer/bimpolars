@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import warnings
 from collections.abc import Iterator, Sequence
-from typing import Any, NamedTuple, cast
+from typing import Any, cast
 
 import ifcopenshell
 import ifcopenshell.geom
@@ -16,10 +16,11 @@ import numpy as np
 import polars as pl
 
 from bimpolars.crs import LinearUnit, engineering_crs
-from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, STYLE_DTYPE, BimDataFrame
+from bimpolars.frame import BimDataFrame
+from bimpolars.mesh import UNSTYLED_RGBA, Mesh, mesh_frame
 from bimpolars.properties import properties_series
 
-DEFAULT_RGBA = (0.7, 0.7, 0.7, 1.0)
+DEFAULT_RGBA = UNSTYLED_RGBA
 """The colour of faces without a surface style: ifcopenshell's default grey."""
 
 _SPATIAL_CLASSES = ("IfcSpatialStructureElement", "IfcSpatialElement")
@@ -219,20 +220,12 @@ def _rgba(material: Any) -> tuple[float, float, float, float]:
     return (components[0], components[1], components[2], alpha)
 
 
-class _Shape(NamedTuple):
-    """One product's tessellation: flat vertices, faces sorted by style, and the styles."""
-
-    vertices: np.ndarray[Any, np.dtype[np.float64]]
-    faces: np.ndarray[Any, np.dtype[np.uint32]]
-    styles: list[dict[str, Any]]
-
-
 def _tessellate(model: ifcopenshell.file, threads: int) -> pl.DataFrame:
     """Tessellates every product with a representation, in world coordinates and model units.
 
     Returns:
-        One row per product that has a shape: its STEP id as ``step_id``, ``mesh``
-        (:data:`bimpolars.MESH_DTYPE`) and ``bbox`` (:data:`bimpolars.BBOX_DTYPE`).
+        One row per product that has a shape: ``mesh`` (:data:`bimpolars.MESH_DTYPE`),
+        ``bbox`` (:data:`bimpolars.BBOX_DTYPE`) and its STEP id as ``step_id``.
 
     Raises:
         ValueError: If ifcopenshell yields two shapes for one product.
@@ -241,7 +234,7 @@ def _tessellate(model: ifcopenshell.file, threads: int) -> pl.DataFrame:
     settings.set("use-world-coords", True)
     settings.set("convert-back-units", True)
     styles = _Styles(model)
-    shapes: dict[int, _Shape] = {}
+    shapes: dict[int, Mesh] = {}
     for step_id, geometry in _shapes(settings, model, threads):
         shape = _shape(geometry, styles)
         if shape is None:
@@ -249,44 +242,8 @@ def _tessellate(model: ifcopenshell.file, threads: int) -> pl.DataFrame:
         if step_id in shapes:
             raise ValueError(f"ifcopenshell yielded more than one shape for #{step_id}")
         shapes[step_id] = shape
-    return _shapes_frame(shapes)
-
-
-def _shapes_frame(shapes: dict[int, _Shape]) -> pl.DataFrame:
-    """Builds the step_id, mesh and bbox columns of the tessellated products."""
-    if not shapes:
-        return pl.DataFrame(
-            [
-                pl.Series("step_id", [], dtype=pl.Int64),
-                pl.Series("mesh", [], dtype=MESH_DTYPE),
-                pl.Series("bbox", [], dtype=BBOX_DTYPE),
-            ]
-        )
-    # polars reads the numpy arrays without boxing their values; the casts turn the Array
-    # dtype it infers when every shape has the same size into the List dtype of MESH_DTYPE
-    vertices = pl.Series("vertices", [shape.vertices for shape in shapes.values()])
-    faces = pl.Series("faces", [shape.faces for shape in shapes.values()])
-    low = np.array([shape.vertices.reshape(-1, 3).min(axis=0) for shape in shapes.values()])
-    high = np.array([shape.vertices.reshape(-1, 3).max(axis=0) for shape in shapes.values()])
-    return pl.DataFrame(
-        [
-            pl.Series("step_id", list(shapes), dtype=pl.Int64),
-            vertices.cast(pl.List(pl.Float64)),
-            faces.cast(pl.List(pl.UInt32)),
-            pl.Series(
-                "styles", [shape.styles for shape in shapes.values()], dtype=pl.List(STYLE_DTYPE)
-            ),
-            pl.Series("xmin", low[:, 0]),
-            pl.Series("ymin", low[:, 1]),
-            pl.Series("zmin", low[:, 2]),
-            pl.Series("xmax", high[:, 0]),
-            pl.Series("ymax", high[:, 1]),
-            pl.Series("zmax", high[:, 2]),
-        ]
-    ).select(
-        "step_id",
-        pl.struct("vertices", "faces", "styles").alias("mesh"),
-        pl.struct("xmin", "ymin", "zmin", "xmax", "ymax", "zmax").alias("bbox"),
+    return mesh_frame(list(shapes.values())).with_columns(
+        pl.Series("step_id", list(shapes), dtype=pl.Int64)
     )
 
 
@@ -302,7 +259,7 @@ def _shapes(settings: Any, model: ifcopenshell.file, threads: int) -> Iterator[t
             break
 
 
-def _shape(geometry: Any, styles: _Styles) -> _Shape | None:
+def _shape(geometry: Any, styles: _Styles) -> Mesh | None:
     """Reads ifcopenshell geometry into arrays, with the faces sorted by style."""
     # The buffers are the C++ vectors' bytes: doubles for the vertices, ints for the faces and
     # material ids. Reading them avoids boxing every number into a Python object.
@@ -326,4 +283,4 @@ def _shape(geometry: Any, styles: _Styles) -> _Shape | None:
                 "face_count": int(count),
             }
         )
-    return _Shape(vertices.copy(), faces[order].astype(np.uint32).ravel(), style_rows)
+    return Mesh(vertices.copy(), faces[order].astype(np.uint32).ravel(), style_rows)
