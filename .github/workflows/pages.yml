@@ -30,11 +30,15 @@ jobs:
         with:
           repository: bedrock-engineer/specklestuff
           path: specklestuff
+      # pnpm at the version of specklestuff's packageManager
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: specklestuff/package.json
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: specklestuff/package-lock.json
+          cache: pnpm
+          cache-dependency-path: specklestuff/pnpm-lock.yaml
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13"
