@@ -15,6 +15,7 @@ import shapely
 import shapely.errors
 
 from bimpolars.frame import BimDataFrame
+from bimpolars.geoparquet import GEOG_COLUMN
 
 FOOTPRINT_DTYPE = pl.Binary
 """The dtype of the ``footprint`` column: ISO WKB with Z coordinates."""
@@ -45,13 +46,17 @@ def simple_features(bdf: BimDataFrame, *, lightbim: bool = False) -> BimDataFram
       ``container`` when that has an ``elevation`` (the storey, for most elements), otherwise
       the row itself, at the lowest z of its mesh. Null without a mesh.
 
+    A ``geog`` column (the footprints in OGC:CRS84h of :func:`bimpolars.geobim.with_geog`) is
+    dropped, since it was the previous footprint's: run ``with_geog`` again on the result.
+
     Args:
         bdf: A BimDataFrame with the ``id``, ``container``, ``elevation``, ``mesh`` and
             ``bbox`` columns a reader fills.
         lightbim: Reserved for the LightBIM reduction of bimpolars#11; only ``False`` works.
 
     Returns:
-        The BimDataFrame with the two columns appended, in the same CRS.
+        The BimDataFrame with the two columns appended (and ``geog`` dropped), in the same
+        CRS.
 
     Raises:
         ValueError: If a required column is missing, ``id`` is not unique, or a row's
@@ -78,7 +83,9 @@ def simple_features(bdf: BimDataFrame, *, lightbim: bool = False) -> BimDataFram
         )
     ref = _footprint_ref(frame)
     footprints = _footprints(frame["mesh"], ref["z"])
-    return bdf.with_frame(frame.with_columns(ref["footprint_ref"], footprints))
+    return bdf.with_frame(
+        frame.drop(GEOG_COLUMN, strict=False).with_columns(ref["footprint_ref"], footprints)
+    )
 
 
 def _footprint_ref(frame: pl.DataFrame) -> pl.DataFrame:

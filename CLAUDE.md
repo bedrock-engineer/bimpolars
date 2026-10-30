@@ -6,8 +6,9 @@ Readers fill the columns in `MODEL_COLUMNS`; `read_ifc` (`src/bimpolars/ifc.py`)
 `simple_features` (`src/bimpolars/features.py`) adds the `FEATURE_COLUMNS` `footprint_ref` and
 `footprint`; `src/bimpolars/geoparquet.py` builds the `geo` metadata that makes the written
 Parquet GeoParquet. `src/bimpolars/geobim.py` (the `[geobim]` extra, pyproj) georeferences a
-model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` and
-`linearized_site_to_ecef`. `src/bimpolars/gltf.py` writes the meshes as binary glTF:
+model: `derived_engineering_crs`, `set_crs`, `to_crs`, `with_geog` (the `geog` column: the
+footprints in OGC:CRS84h), `affine_transformation` and `linearized_site_to_ecef`.
+`src/bimpolars/gltf.py` writes the meshes as binary glTF:
 `element_meshes_glb` (one primitive per style) and `triangles_glb` (any triangles).
 `src/bimpolars/speckle.py` reads a Speckle version from its v3 objects: `version_objects`
 (Parquet or SQLite copy) and `read_speckle` (instances expanded, the bundle's categories,
@@ -91,14 +92,26 @@ the `mesh` and `bbox` columns from it.
   mesh of 720 faces does: `e1d4bdfb-2688-47c1-a386-3b48116e5fd2-0008cb48`, pinned in
   `test_mep`) with `grid_size` = the sliver fraction times the extent, which is the
   fixed-precision overlay that cannot fail.
-- Simple-feature columns (`footprint`, later `geog` and the LightBIM geometry) are ISO WKB with
+- Simple-feature columns (`footprint`, `geog` and later the LightBIM geometry) are ISO WKB with
   Z in a `Binary` column, so that GeoParquet readers (DuckDB spatial, geopandas, GDAL) take them
   as they are; shapely decodes them. Meshes stay nested columns. A geometry column that is
-  listed in `geoparquet.GEOMETRY_COLUMNS` gets `geo` metadata on write, the first present one
-  as the primary. `bbox` is its covering: the `geo` entry points readers at the column's x and
-  y fields, which every footprint lies within, so that a spatial filter can skip row groups. A
-  GeoParquet covering has no z slot, and the column's `zmin..zmax` is the mesh's, which a
-  footprint flat at its storey's elevation often lies outside of; the column keeps all six.
+  listed in `geoparquet.GEOMETRY_COLUMNS` (`geog` before `footprint`) gets `geo` metadata on
+  write, the first present one as the primary. `bbox` is the covering of the columns in the
+  model CRS: the `geo` entry points readers at the column's x and y fields, which every
+  footprint lies within, so that a spatial filter can skip row groups. A GeoParquet covering
+  has no z slot, and the column's `zmin..zmax` is the mesh's, which a footprint flat at its
+  storey's elevation often lies outside of; the column keeps all six.
+- `geog` (`geobim.with_geog`) is `footprint` through `geobim._transformer` to OGC:CRS84h
+  (`crs.CRS84H`, the PROJJSON written out so that the core can label the column), null exactly
+  when `footprint` is, `POLYGON Z EMPTY` where the footprint is; `to_crs` never moves it
+  (`geoparquet.COLUMN_CRS` lists the columns with a CRS of their own, `geobim.WKB_COLUMNS`
+  leaves them out). Its `geo` entry has `CRS84H` as the CRS, the bounds of its own
+  coordinates as the file `bbox` (decoded with shapely on write) and no covering, since
+  `bbox` is in the model CRS; geopandas's `bbox=` filter then refuses the file (it needs a
+  covering on the primary column). pyogrio writes a CRS as WKT1, which cannot say a 3D
+  geographic CRS, so `GeoDataFrame.to_file` on a `geog` frame needs
+  `set_crs("OGC:CRS84", allow_override=True)` first; `to_json()` works as it is. The Sixty5
+  site origin is at 5.46015 E, 51.44648 N (Strijp-S); the model lies within 0.002 degrees.
 - A row's `footprint` is null exactly when its `mesh` is null; a mesh without plan area gets
   `POLYGON Z EMPTY`. The footprint's bounds stay inside the row's `bbox`.
 - glTF (`gltf.py`) is hand-written glb 2.0, no glTF library in the core: vertices in metres

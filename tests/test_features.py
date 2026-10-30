@@ -157,6 +157,18 @@ def test_simple_features_replaces_its_columns() -> None:
     assert twice.equals(once)
 
 
+def test_simple_features_drops_a_stale_geog() -> None:
+    """The geog of bimpolars.geobim.with_geog is the previous footprint's: a recomputation
+    drops it rather than keep a column that no longer matches."""
+    column = {"id": "column", "class": "IfcColumn", "container": "storey"}
+    column["mesh"] = box(10, 20, 3200, 510, 820, 6000)
+    bdf = simple_features(model([*SPATIAL, column]))
+    stale = bdf.with_frame(bdf.frame.with_columns(pl.Series("geog", [None] * 4, dtype=pl.Binary)))
+    again = simple_features(stale)
+    assert again.frame.columns == [*MODEL_COLUMNS, *FEATURE_COLUMNS]
+    assert again.equals(bdf)
+
+
 def test_simple_features_checks_its_input() -> None:
     bdf = model(SPATIAL)
     with pytest.raises(NotImplementedError, match="11"):

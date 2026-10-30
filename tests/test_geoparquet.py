@@ -10,9 +10,12 @@ import pytest
 import shapely
 
 from bimpolars import BimDataFrame, read_parquet, simple_features
+from bimpolars.crs import CRS84H
 from bimpolars.frame import METADATA_KEY
 from bimpolars.geoparquet import (
+    COLUMN_CRS,
     GEO_METADATA_KEY,
+    GEOMETRY_COLUMNS,
     GEOPARQUET_VERSION,
     _wkb_geometry_types,
     geo_metadata,
@@ -53,6 +56,82 @@ def test_geo_metadata(small: BimDataFrame) -> None:
         }
     }
     json.dumps(geo)
+
+
+def lon_lat_square(lon: float, lat: float, z: float, size: float = 1e-5) -> shapely.Polygon:
+    return shapely.Polygon(
+        [(lon, lat, z), (lon + size, lat, z), (lon + size, lat + size, z), (lon, lat + size, z)]
+    )
+
+
+def with_geog_column(
+    small: BimDataFrame, geometries: list[shapely.Geometry | None]
+) -> pl.DataFrame:
+    wkb = [None if g is None else shapely.to_wkb(g, flavor="iso") for g in geometries]
+    return small.frame.with_columns(pl.Series("geog", wkb, dtype=pl.Binary))
+
+
+def test_geog_is_the_primary_column_in_its_own_crs(small: BimDataFrame, tmp_path: Path) -> None:
+    """A geog column (bimpolars.geobim.with_geog) comes first, in OGC:CRS84h, with the bounds
+    of its own coordinates and without the model-CRS bbox as its covering."""
+    assert GEOMETRY_COLUMNS == ("geog", "footprint")
+    assert COLUMN_CRS == {"geog": CRS84H}
+    squares = [
+        None,
+        None,
+        None,
+        lon_lat_square(5.46, 51.44, 60.0),
+        lon_lat_square(5.47, 51.45, 61.0),
+    ]
+    frame = with_geog_column(small, squares)
+    geo = geo_metadata(frame, small.crs)
+    assert geo is not None
+    assert geo["primary_column"] == "geog"
+    assert list(geo["columns"]) == ["geog", "footprint"]
+    geog = geo["columns"]["geog"]
+    assert geog["encoding"] == "WKB"
+    assert geog["geometry_types"] == ["Polygon Z"]
+    assert geog["crs"] == CRS84H
+    assert geog["bbox"] == pytest.approx([5.46, 51.44, 5.47001, 51.45001])
+    assert "covering" not in geog
+    footprint = geo["columns"]["footprint"]
+    assert footprint["crs"] == small.crs
+    assert footprint["bbox"] == [-1000.0, -1000.0, 1000.0, 1000.0]
+    assert footprint["covering"]["bbox"]["xmin"] == ["bbox", "xmin"]
+    json.dumps(geo)
+
+    # Without a geometry, or with empty ones only, geog has no bounds
+    nothing = geo_metadata(with_geog_column(small, [None] * 5), small.crs)
+    assert nothing is not None and "bbox" not in nothing["columns"]["geog"]
+    assert nothing["columns"]["geog"]["geometry_types"] == []
+    empty = shapely.from_wkt("POLYGON Z EMPTY")
+    empties = geo_metadata(with_geog_column(small, [None, None, None, empty, empty]), small.crs)
+    assert empties is not None and "bbox" not in empties["columns"]["geog"]
+    assert empties["columns"]["geog"]["geometry_types"] == ["Polygon Z"]
+    # An empty geometry next to a real one does not widen the bounds
+    mixed = geo_metadata(with_geog_column(small, [None, None, None, squares[3], empty]), small.crs)
+    assert mixed is not None
+    assert mixed["columns"]["geog"]["bbox"] == pytest.approx([5.46, 51.44, 5.46001, 51.44001])
+    # geog alone is a GeoParquet geometry too
+    alone = geo_metadata(frame.drop("footprint"), small.crs)
+    assert alone is not None and list(alone["columns"]) == ["geog"]
+
+    # Written, read back, and read by geopandas with geog as the active geometry
+    bdf = small.with_frame(frame)
+    path = tmp_path / "geog.parquet"
+    bdf.write_parquet(path)
+    assert json.loads(pl.read_parquet_metadata(path)[GEO_METADATA_KEY]) == geo
+    assert read_parquet(path).equals(bdf)
+    geopandas = pytest.importorskip("geopandas")
+    pyproj = pytest.importorskip("pyproj")
+    gdf = geopandas.read_parquet(path)
+    assert gdf.geometry.name == "geog"
+    assert gdf.crs == pyproj.CRS("OGC:CRS84h")
+    assert gdf["footprint"].crs == pyproj.CRS.from_json_dict(small.crs)
+    assert gdf.geometry.dropna().has_z.all()
+    assert list(gdf.geometry.dropna().bounds.iloc[0]) == pytest.approx(
+        [5.46, 51.44, 5.46001, 51.44001]
+    )
 
 
 def test_geo_metadata_without_a_bbox_column(small: BimDataFrame) -> None:
