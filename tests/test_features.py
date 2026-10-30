@@ -282,7 +282,10 @@ def test_sixty5_prefab_facade_footprints() -> None:
 
 @pytest.mark.slow
 def test_sixty5_architectural_footprints() -> None:
-    """The ArchiCAD export, with the 5.5 GB properties Struct dropped first (see CLAUDE.md)."""
+    """The ArchiCAD export, with the 5.5 GB properties Struct dropped first.
+
+    See docs/agents/test-data.md.
+    """
     bdf = read_ifc(data.fetch(data.SIXTY5_ARCHITECTURAL))
     bdf = simple_features(bdf.with_frame(bdf.frame.drop("properties")))
     measures = check_footprints(bdf)

@@ -280,7 +280,7 @@ def test_the_attributes_set_holds_the_predefined_type(sixty5_structural: BimData
 def test_architectural() -> None:
     """The ArchiCAD export: 16,784 products and 191 per-type property sets (plus the
     ``attributes`` set) with 35,068 properties, so the dense properties Struct alone takes
-    about 5.5 GB (see CLAUDE.md)."""
+    about 5.5 GB (see docs/agents/test-data.md)."""
     bdf = read_ifc(data.fetch(data.SIXTY5_ARCHITECTURAL))
     # select the light columns first: a filter on the whole frame copies the properties
     frame = bdf.frame.select("id", "class", "mesh", "bbox")
