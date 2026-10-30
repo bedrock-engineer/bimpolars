@@ -9,6 +9,8 @@ from typing import IO, Any
 
 import polars as pl
 
+from bimpolars.geoparquet import GEO_METADATA_KEY, geo_metadata
+
 METADATA_KEY = "bimpolars"
 """The Parquet file metadata key under which a BimDataFrame stores its CRS."""
 
@@ -63,8 +65,9 @@ class BimDataFrame:
 
     The frame has one row per element, with or without geometry. The columns the readers fill
     are listed in :data:`MODEL_COLUMNS`; the geometry columns ``mesh``, ``bbox`` and
-    ``native_geom`` share the model CRS. The class is thin: work on :attr:`frame` with polars
-    and wrap the result again with :meth:`with_frame`.
+    ``native_geom`` share the model CRS, as do the simple-feature columns
+    :func:`bimpolars.simple_features` adds (``footprint``, WKB). The class is thin: work on
+    :attr:`frame` with polars and wrap the result again with :meth:`with_frame`.
 
     Attributes:
         frame: The elements, one row each.
@@ -145,13 +148,24 @@ class BimDataFrame:
         ``{"version": 1, "crs": <PROJJSON>}``. Every column, nested ones included, reads back
         with its dtype through :func:`read_parquet`.
 
+        A frame with a ``footprint`` column (see :func:`bimpolars.simple_features`) is written
+        as GeoParquet: the file metadata also gets the ``geo`` entry of
+        :func:`bimpolars.geoparquet.geo_metadata`, with ``footprint`` as the primary geometry
+        in the model CRS and ``bbox`` named as its covering (the x and y fields each footprint
+        lies within), so that GeoParquet readers find the footprints with their CRS and skip
+        row groups for a spatial filter.
+
         Args:
             file: Where to write: a path or a binary file object.
             **kwargs: Passed on to :meth:`polars.DataFrame.write_parquet`. A ``metadata`` dict
-                is written too, next to the :data:`METADATA_KEY` entry.
+                is written too, except that its :data:`METADATA_KEY` and ``geo`` entries,
+                if any, are replaced by the ones described above.
         """
         metadata = dict(kwargs.pop("metadata", None) or {})
         metadata[METADATA_KEY] = json.dumps({"version": METADATA_VERSION, "crs": self._crs})
+        geo = geo_metadata(self._frame, self._crs)
+        if geo is not None:
+            metadata[GEO_METADATA_KEY] = json.dumps(geo)
         self._frame.write_parquet(file, metadata=metadata, **kwargs)
 
     @classmethod
