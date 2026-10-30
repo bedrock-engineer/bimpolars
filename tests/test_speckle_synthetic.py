@@ -480,6 +480,94 @@ def test_bundle_materials_for_definition_geometry(bundled: BimDataFrame) -> None
     ]
 
 
+def test_bundle_elements_without_an_object_get_rows() -> None:
+    # a curtain wall the projection left out: the bundle knows it, the version does not
+    tables = bundle_tables()
+    tables["eav.objects"] = pl.concat(
+        [tables["eav.objects"], pl.DataFrame({"object_index": [3], "application_id": ["cw1"]})]
+    )
+    tables["eav.eav"] = pl.concat(
+        [
+            tables["eav.eav"],
+            pl.DataFrame(
+                {
+                    "object_index": [3, 3, 3],
+                    "path_index": [0, 1, 2],
+                    "value_string": ["Walls", "Curtain Wall 1", "Curtain Wall"],
+                    "value_double": [None, None, None],
+                    "value_boolean": [None, None, None],
+                }
+            ),
+        ],
+        how="vertical_relaxed",
+    )
+    tables["envelope.relations"] = pl.concat(
+        [
+            tables["envelope.relations"],
+            pl.DataFrame({"rel": [7], "src": [3], "dst": [7], "ord": [0]}),
+        ]
+    )
+    bdf = read_speckle(model_objects(), tables)
+    assert bdf.frame["id"].to_list() == [
+        "level-7",
+        "w1",
+        "d1",
+        "col-1",
+        "i2",
+        "m1",
+        "e1",
+        "beam",
+        "cw1",
+    ]
+    wall = row(bdf, "cw1")
+    assert wall["class"] == "Walls"
+    assert wall["name"] == "Curtain Wall 1"
+    assert wall["container"] == "level-7"
+    assert wall["properties"][OBJECT_SET] == {"family": "Curtain Wall"}
+    assert wall["mesh"] is None and wall["bbox"] is None
+    assert read_speckle(model_objects()).frame["id"].to_list()[-1] == "beam"
+
+
+def test_envelope_kinds_and_relations_are_looked_up_by_name() -> None:
+    # a bundle that numbers LEVEL and ON_LEVEL differently says so in its lookup tables
+    tables = bundle_tables()
+    tables["envelope.nodes"] = tables["envelope.nodes"].with_columns(kind=pl.Series([9, 3]))
+    tables["envelope.relations"] = tables["envelope.relations"].with_columns(
+        rel=pl.Series([11, 11, 5])
+    )
+    tables["envelope.node_kinds"] = pl.DataFrame({"kind": [9, 3], "name": ["LEVEL", "MATERIAL"]})
+    tables["envelope.rel_types"] = pl.DataFrame(
+        {"rel": [11, 5], "name": ["ON_LEVEL", "HAS_MATERIAL"]}
+    )
+    renumbered = read_speckle(model_objects(), tables)
+    assert renumbered.frame["id"][0] == "level-7"
+    assert row(renumbered, "w1")["container"] == "level-7"
+    assert [style["name"] for style in row(renumbered, "col-1")["mesh"]["styles"]] == ["Concrete"]
+    # without the lookup tables the renumbered bundle has no levels
+    del tables["envelope.node_kinds"], tables["envelope.rel_types"]
+    assert read_speckle(model_objects(), tables).frame["id"][0] == "w1"
+
+
+def test_missing_references() -> None:
+    # a DataChunk the version lacks is an error; a displayValue it lacks is skipped
+    objects = [obj for obj in model_objects() if obj["id"] != "def-mesh-f"]
+    with pytest.raises(ValueError, match="'def-mesh-f' is missing"):
+        read_speckle(objects)
+    objects = [obj for obj in model_objects() if obj["id"] != "door-mesh"]
+    assert row(read_speckle(objects), "d1")["mesh"] is None
+
+
+def test_speckle_type_chains_and_a_missing_type() -> None:
+    objects = model_objects()
+    collection = next(obj for obj in objects if obj["id"] == "coll")
+    collection["speckle_type"] = "Speckle.Core.Models.Collections.Collection:Objects.Other.Layer"
+    bare_mesh = next(obj for obj in objects if obj["id"] == "bare-mesh")
+    del bare_mesh["speckle_type"]
+    frame = read_speckle(objects).frame
+    assert "coll-1" not in frame["id"].to_list()  # a chained type is still a collection
+    assert frame.filter(pl.col("id") == "m1")["class"][0] is None  # not the string "None"
+
+
 def test_bundle_folder_and_missing_tables(tmp_path) -> None:
     tables = bundle_tables()
     for table, frame in tables.items():

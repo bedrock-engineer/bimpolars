@@ -20,11 +20,8 @@ import shapely.affinity
 
 from bimpolars.crs import LinearUnit, engineering_crs
 from bimpolars.frame import NATIVE_GEOM_DTYPE, BimDataFrame
-from bimpolars.mesh import UNSTYLED_RGBA, Mesh, mesh_frame
+from bimpolars.mesh import UNSTYLED, UNSTYLED_RGBA, Mesh, Style, mesh_frame, styled_mesh
 from bimpolars.properties import ATTRIBUTES_PSET, properties_series
-
-DEFAULT_RGBA = UNSTYLED_RGBA
-"""The colour of faces without a surface style: ifcopenshell's default grey."""
 
 _SPATIAL_CLASSES = ("IfcSpatialStructureElement", "IfcSpatialElement")
 
@@ -531,7 +528,7 @@ def _rgba(material: Any) -> tuple[float, float, float, float]:
     """A material's diffuse colour and opacity, each 0..1."""
     components = [float(c) for c in material.diffuse.components]
     if len(components) != 3 or any(np.isnan(components)):
-        return DEFAULT_RGBA
+        return UNSTYLED_RGBA
     alpha = 1.0
     if material.has_transparency():
         transparency = float(material.transparency)
@@ -580,9 +577,10 @@ def _shapes(settings: Any, model: ifcopenshell.file, threads: int) -> Iterator[t
 
 
 def _shape(geometry: Any, styles: _Styles) -> Mesh | None:
-    """Reads ifcopenshell geometry into arrays, with the faces sorted by style."""
+    """Reads ifcopenshell geometry into a Mesh, with the faces sorted by style."""
     # The buffers are the C++ vectors' bytes: doubles for the vertices, ints for the faces and
-    # material ids. Reading them avoids boxing every number into a Python object.
+    # material ids (-1 for a face without a style). Reading them avoids boxing every number
+    # into a Python object.
     vertices = np.frombuffer(geometry.verts_buffer, dtype=np.float64)
     faces = np.frombuffer(geometry.faces_buffer, dtype=np.int32).reshape(-1, 3)
     material_ids = np.frombuffer(geometry.material_ids_buffer, dtype=np.int32)
@@ -590,17 +588,6 @@ def _shape(geometry: Any, styles: _Styles) -> Mesh | None:
         return None
     if len(material_ids) != len(faces):
         raise ValueError("ifcopenshell gave a material id count that differs from the face count")
-    order = np.argsort(material_ids, kind="stable")
-    unique_ids, counts = np.unique(material_ids, return_counts=True)
-    materials = geometry.materials
-    style_rows = []
-    for material_id, count in zip(unique_ids.tolist(), counts.tolist(), strict=True):
-        material = materials[material_id] if material_id >= 0 else None
-        style_rows.append(
-            {
-                "name": None if material is None else styles.name(material),
-                "rgba": list(DEFAULT_RGBA if material is None else _rgba(material)),
-                "face_count": int(count),
-            }
-        )
-    return Mesh(vertices.copy(), faces[order].astype(np.uint32).ravel(), style_rows)
+    # style 0 is the unstyled faces, style i + 1 the i-th material
+    materials = [UNSTYLED, *(Style(styles.name(m), _rgba(m)) for m in geometry.materials)]
+    return styled_mesh(vertices.copy(), faces, material_ids + 1, materials)

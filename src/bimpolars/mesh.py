@@ -21,7 +21,23 @@ type Rgba = tuple[float, float, float, float]
 """A colour and opacity, each 0..1."""
 
 UNSTYLED_RGBA: Rgba = (0.7, 0.7, 0.7, 1.0)
-"""The colour of faces without a style: the grey ifcopenshell gives them."""
+"""The colour of faces without a style, in every reader: the grey ifcopenshell gives them."""
+
+
+class Style(NamedTuple):
+    """A style of faces, as the ``styles`` of a :class:`Mesh` list them.
+
+    Attributes:
+        name: The style's name; None for faces without a style.
+        rgba: The style's colour and opacity, each 0..1.
+    """
+
+    name: str | None
+    rgba: Rgba
+
+
+UNSTYLED = Style(None, UNSTYLED_RGBA)
+"""The style of faces without one."""
 
 
 class Mesh(NamedTuple):
@@ -44,7 +60,7 @@ def styled_mesh(
     vertices: np.ndarray[Any, np.dtype[np.float64]],
     faces: np.ndarray[Any, np.dtype[np.integer[Any]]],
     style_ids: np.ndarray[Any, np.dtype[np.integer[Any]]],
-    styles: Sequence[tuple[str | None, Rgba]],
+    styles: Sequence[Style],
 ) -> Mesh:
     """Builds a :class:`Mesh` from faces that each carry a style.
 
@@ -55,7 +71,7 @@ def styled_mesh(
         vertices: ``(n, 3)`` or flat vertex coordinates.
         faces: ``(m, 3)`` vertex indices.
         style_ids: Per face, the index of its style in ``styles``; ``m`` entries.
-        styles: The ``(name, rgba)`` styles the ids index.
+        styles: The styles the ids index.
 
     Returns:
         The mesh with its faces grouped by style.
@@ -70,7 +86,11 @@ def styled_mesh(
     order = np.argsort(style_ids, kind="stable")
     unique_ids, counts = np.unique(style_ids, return_counts=True)
     style_rows = [
-        {"name": styles[style_id][0], "rgba": list(styles[style_id][1]), "face_count": int(count)}
+        {
+            "name": styles[style_id].name,
+            "rgba": list(styles[style_id].rgba),
+            "face_count": int(count),
+        }
         for style_id, count in zip(unique_ids.tolist(), counts.tolist(), strict=True)
     ]
     return Mesh(

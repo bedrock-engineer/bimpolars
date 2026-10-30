@@ -1,8 +1,11 @@
-"""Synthetic BimDataFrames for the tests: boxes as meshes in a three-level spatial structure."""
+"""Synthetic BimDataFrames for the tests: boxes as meshes in a three-level spatial structure,
+and the helpers the test modules share."""
 
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 from typing import Any
 
 import numpy as np
@@ -165,3 +168,29 @@ SPATIAL = [
     {"id": "building", "class": "IfcBuilding", "container": "site"},
     {"id": "storey", "class": "IfcBuildingStorey", "container": "building", "elevation": 3000.0},
 ]
+
+
+def style_faces(frame: pl.DataFrame) -> pl.DataFrame:
+    """Per row with a mesh: the face count and the sum of the styles' face counts."""
+    mesh = pl.col("mesh").struct
+    return frame.filter(pl.col("mesh").is_not_null()).select(
+        "id",
+        n_faces=mesh.field("faces").list.len() // 3,
+        n_faces_styled=mesh.field("styles")
+        .list.eval(pl.element().struct.field("face_count"))
+        .list.sum(),
+        n_styles=mesh.field("styles").list.len(),
+    )
+
+
+def run_without(module: str, code: str) -> list[str]:
+    """Runs Python code in a subprocess that cannot import ``module``; the lines it prints.
+
+    ``sys.modules[module] = None`` makes every import of the module raise ImportError, which is
+    how the tests check that the core does without an optional dependency.
+    """
+    script = f"import sys; sys.modules[{module!r}] = None\n{code}"
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, check=True
+    )
+    return result.stdout.strip().splitlines()
