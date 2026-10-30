@@ -19,7 +19,15 @@ import shapely
 
 pyproj = pytest.importorskip("pyproj")
 
-from bimpolars import BBOX_DTYPE, MESH_DTYPE, BimDataFrame, linear_unit, read_parquet  # noqa: E402
+from bimpolars import (  # noqa: E402
+    BBOX_DTYPE,
+    MESH_DTYPE,
+    NATIVE_GEOM_DTYPE,
+    BimDataFrame,
+    linear_unit,
+    read_parquet,
+    simple_features,
+)
 from bimpolars.frame import MODEL_COLUMNS  # noqa: E402
 from bimpolars.geobim import (  # noqa: E402
     AFFINE_TOLERANCE,
@@ -30,7 +38,7 @@ from bimpolars.geobim import (  # noqa: E402
     to_crs,
 )
 from bimpolars.geoparquet import GEO_METADATA_KEY, geo_metadata  # noqa: E402
-from tests.synthetic import SPATIAL, box, model  # noqa: E402
+from tests.synthetic import SPATIAL, box, model, sweep, translation  # noqa: E402
 
 
 class Site(NamedTuple):
@@ -451,17 +459,17 @@ def test_georeferenced_model_writes_geoparquet_in_the_target_crs(
 
 
 def native_geom_model() -> BimDataFrame:
-    """A model with a placeholder native_geom column, as a reader of #11 could fill it."""
+    """The column model with the column's sweep in native_geom, as read_ifc fills it."""
     bdf = column_model()
+    profile = shapely.box(-250, -400, 250, 400)
     native = pl.Series(
         "native_geom",
-        [None, None, None, {"item": "IfcExtrudedAreaSolid", "depth": 2800.0}],
-        dtype=pl.Struct({"item": pl.String, "depth": pl.Float64}),
+        [None, None, None, [sweep(translation(260, 420, 3200), profile, 2800)]],
+        dtype=NATIVE_GEOM_DTYPE,
     )
     return bdf.with_frame(bdf.frame.with_columns(native))
 
 
-@pytest.mark.filterwarnings("ignore:the best transformation")
 def test_a_non_affine_target_drops_native_geom() -> None:
     bdf = native_geom_model()
     geographic = to_crs(bdf, "OGC:CRS84h")
@@ -488,10 +496,35 @@ def test_an_affine_target_keeps_native_geom() -> None:
     assert (
         np.abs((homogeneous @ matrix.T)[:, :3] - SIXTY5.to_rd(SITE_POINTS)).max() < AFFINE_TOLERANCE
     )
-    # The placement of a filled native_geom waits for its layout (#11)
-    with pytest.raises(NotImplementedError, match="bimpolars#11"):
-        to_crs(bdf, "EPSG:7415")
-    # An empty native_geom column passes through
+    # The matrix is composed onto the sweep's placement: the profile and the depth stay in
+    # the sweep's millimetres and the placement, scale included, takes them to RD metres
+    rd = to_crs(bdf, "EPSG:7415")
+    assert rd.frame.schema["native_geom"] == NATIVE_GEOM_DTYPE
+    assert rd.frame["native_geom"].null_count() == 3
+    (moved,) = rd.frame["native_geom"][3]
+    (original,) = bdf.frame["native_geom"][3]
+    placement = np.array(moved["placement"]).reshape(4, 4)
+    origin = placement @ np.array([0.0, 0.0, 0.0, 1.0])
+    assert origin[:3] == pytest.approx(SIXTY5.to_rd([[260, 420, 3200]])[0], abs=1e-6)
+    assert np.linalg.norm(placement[:3, :3], axis=0) == pytest.approx(0.001)
+    assert moved["profile"] == original["profile"] and moved["depth"] == 2800.0
+    assert moved["direction"] == [0.0, 0.0, 1.0]
+    # The LightBIM axis of the moved sweep is the moved LightBIM axis
+    rd_first = simple_features(rd, lightbim=True)
+    site_first = to_crs(simple_features(bdf, lightbim=True), "EPSG:7415")
+    for moved_bdf in (rd_first, site_first):
+        assert moved_bdf.frame["lightbim_qa"][3]["source"] == "extrusion"
+    axis_rd_first = shapely.from_wkb(rd_first.frame["lightbim"][3])
+    axis_site_first = shapely.from_wkb(site_first.frame["lightbim"][3])
+    assert shapely.get_coordinates(axis_rd_first, include_z=True) == pytest.approx(
+        shapely.get_coordinates(axis_site_first, include_z=True), abs=1e-6
+    )
+    # A native_geom of another layout cannot be placed; an empty column passes through
+    placeholder = bdf.with_frame(
+        bdf.frame.with_columns(pl.Series("native_geom", [None, None, None, {"depth": 2800.0}]))
+    )
+    with pytest.raises(TypeError, match="NATIVE_GEOM_DTYPE"):
+        to_crs(placeholder, "EPSG:7415")
     empty = bdf.with_frame(
         bdf.frame.with_columns(pl.Series("native_geom", [None] * 4, dtype=pl.Null))
     )

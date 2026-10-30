@@ -35,7 +35,8 @@ except ImportError as error:
     ) from error
 
 from bimpolars.crs import PROJJSON_SCHEMA, LinearUnit, as_linear_unit, linear_unit, unit_projjson
-from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, BimDataFrame
+from bimpolars.features import _clamp_xy
+from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, NATIVE_GEOM_DTYPE, SWEEP_DTYPE, BimDataFrame
 from bimpolars.geoparquet import GEOMETRY_COLUMNS
 
 CRSLike = Mapping[str, Any] | pyproj.CRS | str | int
@@ -236,11 +237,14 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
     rotation). The model's length unit becomes the target's: a model in millimetres moved to
     EPSG:7415 is in metres.
 
-    ``native_geom``, the sweeps of bimpolars#11 placed in the model CRS, survives only an
-    affine transformation (to the base CRS of a :func:`derived_engineering_crs`, for example):
-    the column is nulled when the transformation is not affine within
-    :data:`AFFINE_TOLERANCE` over the model's extent (and at least a kilometre), as it is to a
-    geographic, geocentric or differently projected CRS.
+    ``native_geom``, the sweeps a reader placed in the model CRS
+    (:data:`bimpolars.NATIVE_GEOM_DTYPE`), survives only an affine transformation (to the base
+    CRS of a :func:`derived_engineering_crs`, for example): the matrix of
+    :func:`affine_transformation` is composed onto every sweep's ``placement``, scale
+    included, so that the profile and the depth stay in the sweep's own coordinates. The
+    column is nulled when the transformation is not affine within :data:`AFFINE_TOLERANCE`
+    over the model's extent (and at least a kilometre), as it is to a geographic, geocentric
+    or differently projected CRS.
 
     The transformation from or to a derived CRS, such as the compound of
     :func:`derived_engineering_crs`, goes through its base CRS, so that PROJ's geodetic steps
@@ -263,9 +267,9 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
         ValueError: If pyproj knows no transformation from the model CRS to ``crs`` (a plain
             EngineeringCRS is not georeferenced: :func:`set_crs` it first), if ``crs`` does
             not have three axes, or if a coordinate does not transform.
-        TypeError: If a column of :data:`WKB_COLUMNS` is not Binary.
-        NotImplementedError: If ``native_geom`` holds values and the transformation is affine:
-            their placement follows the layout of bimpolars#11.
+        TypeError: If a column of :data:`WKB_COLUMNS` is not Binary, or ``native_geom`` holds
+            values of another layout than :data:`bimpolars.NATIVE_GEOM_DTYPE` under an affine
+            transformation.
     """
     transformer, source, target, projjson = _prepare(bdf, crs)
     frame = bdf.frame
@@ -291,12 +295,61 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
         matrix = _affine_matrix(transformer, source, target, frame)
         if matrix is None:
             columns.append(pl.Series("native_geom", [None] * len(frame), dtype=pl.Null))
+        elif frame.schema["native_geom"] == NATIVE_GEOM_DTYPE:
+            columns.append(_place_sweeps(frame["native_geom"], matrix))
         elif frame.schema["native_geom"] != pl.Null:
-            raise NotImplementedError(
-                "placing native_geom in another CRS is not implemented yet: its layout comes "
-                "with bimpolars#11"
+            raise TypeError(
+                f"native_geom has the dtype {frame.schema['native_geom']}, not "
+                "bimpolars.NATIVE_GEOM_DTYPE, so to_crs cannot place it"
             )
     return BimDataFrame(frame.with_columns(columns), projjson)
+
+
+def _place_sweeps(
+    native_geom: pl.Series, matrix: np.ndarray[Any, np.dtype[np.float64]]
+) -> pl.Series:
+    """Composes an affine matrix onto the ``placement`` of every sweep of a ``native_geom``.
+
+    The other fields stay: the profile and the depth are in the sweep's own coordinates, and
+    the composed placement, scale and all, takes them to the target CRS.
+    """
+    exploded = pl.DataFrame(
+        {"row": np.arange(len(native_geom)), "sweep": native_geom.alias("sweep")}
+    ).explode("sweep")
+    placements = exploded["sweep"].struct.field("placement")
+    present = placements.is_not_null().to_numpy()
+    values = np.full((len(exploded), 16), np.nan)
+    if present.any():
+        old = placements.drop_nulls().to_numpy().reshape(-1, 4, 4)
+        values[present] = (matrix[None, :, :] @ old).reshape(-1, 16)
+    placed = pl.Series("placement", values, dtype=pl.Array(pl.Float64, 16))
+    sweep = pl.col("sweep")
+    rebuilt = exploded.with_columns(
+        pl.when(sweep.is_null())
+        .then(None)
+        .otherwise(
+            pl.struct(
+                [
+                    placed if field.name == "placement" else sweep.struct.field(field.name)
+                    for field in SWEEP_DTYPE.fields
+                ]
+            )
+        )
+        .cast(SWEEP_DTYPE)
+        .alias("sweep")
+    )
+    # Exploding a null or empty list gives one null row, so every row has a group; the rows
+    # that were null stay null, instead of becoming empty lists
+    grouped = rebuilt.group_by("row", maintain_order=True).agg(pl.col("sweep").drop_nulls())
+    return pl.DataFrame(
+        {"was": native_geom.alias("was"), "now": grouped["sweep"].alias("now")}
+    ).select(
+        pl.when(pl.col("was").is_null())
+        .then(None)
+        .otherwise(pl.col("now"))
+        .cast(NATIVE_GEOM_DTYPE)
+        .alias("native_geom")
+    )["native_geom"]
 
 
 def affine_transformation(
@@ -308,7 +361,8 @@ def affine_transformation(
     the model (its extent, at least a kilometre across) and fitted by least squares. It is
     affine when no corner strays more than :data:`AFFINE_TOLERANCE` metres from the fit; a
     geographic or geocentric target never is. The matrix carries the change of unit: from a
-    model in millimetres to EPSG:7415 its linear part has a scale of 0.001.
+    model in millimetres to EPSG:7415 its linear part has a scale of 0.001, which is why
+    :func:`to_crs` composes it onto a sweep's ``placement`` rather than onto its profile.
 
     Args:
         bdf: The model.
@@ -670,17 +724,6 @@ def _clamp_to_bbox(wkb: pl.Series, bbox: pl.Series) -> pl.Series:
         clamped = _clamp_xy(geometries[row], low[row], high[row])
         values[row] = shapely.to_wkb(clamped, flavor="iso")
     return pl.Series(wkb.name, values, dtype=pl.Binary)
-
-
-def _clamp_xy(
-    geometry: shapely.Geometry, low: np.ndarray[Any, Any], high: np.ndarray[Any, Any]
-) -> shapely.Geometry:
-    """Moves the x and y of a 3D geometry's coordinates outside a box onto its edge; z stays."""
-
-    def clip(coordinates: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
-        return np.column_stack([np.clip(coordinates[:, :2], low, high), coordinates[:, 2:]])
-
-    return shapely.transform(geometry, clip, include_z=True)
 
 
 def _affine_matrix(

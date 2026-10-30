@@ -32,7 +32,6 @@ openings gets its holes.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -132,6 +131,11 @@ CLASSES: dict[str, Kind | None] = {
     "IfcOpeningElement": None,
     "IfcSpace": None,
     "IfcAnnotation": None,
+    "IfcReinforcingBar": None,
+    "IfcReinforcingMesh": None,
+    "IfcTendon": None,
+    "IfcTendonAnchor": None,
+    "IfcMechanicalFastener": None,
     # Revit categories, the class of read_speckle rows
     "Structural Columns": Kind("curve", "column", True),
     "Columns": Kind("curve", "column", None),
@@ -144,15 +148,23 @@ CLASSES: dict[str, Kind | None] = {
     "Ramps": Kind("mass", "ramp", None),
     "Rooms": None,
     "Areas": None,
+    "Structural Rebar": None,
+    "Structural Area Reinforcement": None,
+    "Structural Path Reinforcement": None,
+    "Structural Fabric Reinforcement": None,
+    "Structural Rebar Couplers": None,
+    "Structural Connections": None,
+    "Structural Stiffeners": None,
 }
 """The kind per source class: IFC classes (``IfcSlab``), IFC classes with their predefined
 type (``IfcSlab.BASESLAB``, which wins over ``IfcSlab``) and Revit categories (``Walls``).
 
-A None field is undecided and falls through: a ``role`` to the orientation of the member
-(an ``IfcMember`` or Revit ``Structural Framing`` is a column, a beam or a brace by the angle
-of its axis), ``load_bearing`` to the ``LoadBearing`` property (IFC) or the ``Structural``
-parameter (Revit). A None entry is a class that is no member at all (an opening's void, a
-space): its rows get null LightBIM columns. A ``support`` whose shape is a vertical line
+A None field is undecided and falls through: a ``role`` to the orientation of the member (an
+``IfcMember`` or Revit ``Structural Framing`` is a column, a beam or a brace by the angle of its
+axis), ``load_bearing`` to the ``LoadBearing`` property (IFC) or the ``Structural`` parameter
+(Revit). A None entry is a class that is no member at all (an opening's void, a space;
+reinforcement, connections and stiffeners, which an analysis model carries in its sections):
+its rows get null LightBIM columns. A ``support`` whose shape is a vertical line
 (a pile exported as a footing) becomes a ``curve`` with the role ``pile``. Edit the dict, or
 pass ``kind`` to :func:`lightbim_features`, to change the table.
 """
@@ -201,12 +213,12 @@ def lightbim_features(bdf: BimDataFrame, *, kind: pl.Expr | None = None) -> pl.D
             for field in ("xmin", "ymin", "zmin", "xmax", "ymax", "zmax")
         ]
     )
-    footprints = frame["footprint"]
+    footprints = frame["footprint"].to_list()
 
     geometries: list[bytes | None] = [None] * len(frame)
     kinds: list[dict[str, Any] | None] = [None] * len(frame)
     qa: list[dict[str, Any] | None] = [None] * len(frame)
-    for row in arrays.present:
+    for row in arrays.present.tolist():
         if skip[row]:
             continue
         vertices, faces = arrays.row(row)
@@ -218,7 +230,7 @@ def lightbim_features(bdf: BimDataFrame, *, kind: pl.Expr | None = None) -> pl.D
             roles[row],
             rules[row],
             sweeps[row] if sweeps is not None else None,
-            lambda: shapely.from_wkb(footprints[row]),
+            footprints[row],
         )
         geometries[row] = shapely.to_wkb(reduction.geometry, flavor="iso")
         kinds[row] = {
@@ -272,32 +284,31 @@ def _reduce(
     role: str | None,
     rule: str,
     sweep: dict[str, Any] | None,
-    footprint: Callable[[], shapely.Geometry],
+    footprint: bytes | None,
 ) -> _Reduction:
     """Reduces one mesh to its LightBIM feature."""
     box: _Box | None = None
     line: _Line | None = None
+    shape_line: _Line | None = None
     source = "mesh"
     if member is None:
         box = _tightest_box(vertices)
         member, axis = _shape(box)
-        line = _Line(box.centre, axis)
+        shape_line = _Line(box.centre, axis)
     elif member == "support":
         # A pile exported as a footing: a support whose shape is a vertical line
         box = _tightest_box(vertices)
         shape_member, axis = _shape(box)
         if shape_member == "curve" and abs(axis[2]) >= _COS_UPRIGHT:
             member, role, rule = "curve", "pile", "shape"
-            line = _Line(box.centre, axis)
-    if member in ("curve", "surface") and line is None:
+            shape_line = _Line(box.centre, axis)
+    if member in ("curve", "surface"):
         if sweep is not None:
-            placed = _sweep_line(sweep, member)
-            if placed is not None:
-                line = placed
+            line = _sweep_line(sweep, member)
+            if line is not None:
                 source = "extrusion, cuts ignored" if sweep["clipped"] else "extrusion"
         if line is None:
-            box = box or _tightest_box(vertices)
-            line = _box_line(box, member, role)
+            line = shape_line or _box_line(box or _tightest_box(vertices), member, role)
     if member == "curve":
         assert line is not None
         geometry, deviation = _curve(vertices, line)
@@ -305,16 +316,23 @@ def _reduce(
         assert line is not None
         geometry, deviation = _surface(vertices, faces, line)
     elif member == "support":
-        geometry = shapely.force_3d(shapely.force_2d(footprint()), z=bbox[2])
+        geometry = shapely.force_3d(_plan(footprint), z=bbox[2])
         deviation = float((vertices[:, 2] - bbox[2]).max())
     else:
         z = _centre_of_gravity(vertices, faces)[2]
-        geometry = shapely.force_3d(shapely.force_2d(footprint()), z=z)
+        geometry = shapely.force_3d(_plan(footprint), z=z)
         deviation = float(np.abs(vertices[:, 2] - z).max())
     if role is None and rule != "shape" and line is not None:
         role = _role_from_orientation(member, line.axis)
     geometry = _clamp_xy(geometry, bbox[:2], bbox[3:5])
     return _Reduction(geometry, member, role, rule, source, deviation)
+
+
+def _plan(footprint: bytes | None) -> shapely.Geometry:
+    """A row's footprint in 2D: the plan outline its support or mass lies flat in."""
+    if footprint is None:  # simple_features gives every row with a mesh a footprint
+        return shapely.Polygon()
+    return shapely.force_2d(shapely.from_wkb(footprint))
 
 
 def _decide(frame: pl.DataFrame, kind: pl.Expr | None) -> pl.DataFrame:
@@ -353,7 +371,7 @@ def _override(frame: pl.DataFrame, kind: pl.Expr | None) -> pl.DataFrame:
     )
     if kind is None:
         return empty
-    values = frame.select(kind.alias("kind"))["kind"]
+    values = frame.with_columns(kind.alias("__kind"))["__kind"]  # a literal broadcasts
     if isinstance(values.dtype, pl.Struct):
         fields = {field.name for field in values.dtype.fields}
         unknown = fields - {"member", "role", "load_bearing"}
@@ -417,15 +435,15 @@ def _table(frame: pl.DataFrame) -> pl.DataFrame:
     by_class = rows.join(
         entries, left_on="class", right_on="key", how="left", maintain_order="left"
     )
-    take_key = by_key["found"].fill_null(False)
-    return pl.DataFrame(
+    take_key = pl.col("found").fill_null(False)
+    return by_key.select(
         [
-            pl.when(take_key).then(by_key[name]).otherwise(by_class[name]).alias(f"class_{name}")
+            pl.when(take_key).then(pl.col(name)).otherwise(by_class[name]).alias(f"class_{name}")
             for name in ("member", "role", "load_bearing")
         ]
         + [
             pl.when(take_key)
-            .then(by_key["skip"])
+            .then(pl.col("skip"))
             .otherwise(by_class["skip"])
             .fill_null(False)
             .alias("class_skip")
@@ -473,13 +491,14 @@ def _as_boolean(values: pl.Series) -> pl.Series:
         return values != 0
     if values.dtype == pl.String:
         lowered = values.str.to_lowercase()
-        return (
+        return pl.select(
             pl.when(lowered.is_in(["yes", "true", "1"]))
             .then(True)
             .when(lowered.is_in(["no", "false", "0"]))
             .then(False)
             .otherwise(None)
-        ).alias(values.name)
+            .alias(values.name)
+        ).to_series()
     return pl.Series(values.name, [None] * len(values), dtype=pl.Boolean)
 
 
@@ -520,11 +539,13 @@ def _sweeps(frame: pl.DataFrame) -> list[dict[str, Any] | None] | None:
 def _sweep_line(sweep: dict[str, Any], member: str) -> _Line | None:
     """The axis of a curve member or the midplane of a surface, from its sweep.
 
-    The axis of a curve member is the sweep direction through the profile's centroid when the
-    extrusion is at least as long as the profile's long side, else the profile's long axis
-    at mid-depth (a beam extruded across its width). The normal of a surface is the sweep
-    direction when the extrusion is no longer than the profile's short side (a slab), else
-    the profile's short axis (a wall); the plane passes through the middle of the sweep.
+    The axis of a curve member is the sweep direction through the profile's centroid. Only a
+    beam extruded across its width, whose profile is its side view (a slender profile,
+    :data:`SLENDERNESS` times longer than it is wide and than the depth), gets the profile's
+    long axis at mid-depth instead; a short stub keeps its extrusion as the axis. The normal
+    of a surface is the sweep direction when the extrusion is no longer than the profile's
+    short side (a slab), else the profile's short axis (a wall); the plane passes through the
+    middle of the sweep.
 
     Returns:
         None when the profile is degenerate.
@@ -560,7 +581,8 @@ def _sweep_line(sweep: dict[str, Any], member: str) -> _Line | None:
     long_side = float(np.linalg.norm(linear @ np.append(edges[long], 0.0)))
     short_side = float(np.linalg.norm(linear @ np.append(edges[short], 0.0)))
     if member == "curve":
-        if length >= long_side:
+        sideways = long_side >= SLENDERNESS * max(short_side, length)
+        if not sideways:
             return _Line(lift(profile.centroid.coords[0]), extrusion / length)
         return _Line(lift(corners.mean(axis=0)), direction(edges[long]))
     if length <= short_side:
@@ -628,7 +650,7 @@ def _principal_direction(plan: _Floats) -> _Floats:
 
 def _snapped(axes: _Floats) -> _Floats:
     """Snaps principal axes within :data:`SNAP_ANGLE` of a model axis to it, kept orthonormal."""
-    snapped = []
+    snapped: list[_Floats] = []
     for axis in axes:
         nearest = int(np.argmax(np.abs(axis)))
         if abs(axis[nearest]) >= _COS_SNAP:

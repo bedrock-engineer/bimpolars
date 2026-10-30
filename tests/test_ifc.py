@@ -4,10 +4,20 @@ import ifcopenshell
 import numpy as np
 import polars as pl
 import pytest
+import shapely
 
-from bimpolars import BBOX_DTYPE, MESH_DTYPE, BimDataFrame, data, read_ifc, read_parquet
+from bimpolars import (
+    BBOX_DTYPE,
+    MESH_DTYPE,
+    NATIVE_GEOM_DTYPE,
+    BimDataFrame,
+    data,
+    read_ifc,
+    read_parquet,
+)
 from bimpolars.frame import MODEL_COLUMNS
 from bimpolars.ifc import DEFAULT_RGBA
+from bimpolars.properties import ATTRIBUTES_PSET
 
 SPATIAL = ["IfcSite", "IfcBuilding", "IfcBuildingStorey"]
 
@@ -31,7 +41,7 @@ def test_columns(sixty5_structural: BimDataFrame) -> None:
     assert frame.schema["class"] == pl.Categorical
     assert frame.schema["mesh"] == MESH_DTYPE
     assert frame.schema["bbox"] == BBOX_DTYPE
-    assert frame.schema["native_geom"] == pl.Null
+    assert frame.schema["native_geom"] == NATIVE_GEOM_DTYPE
 
 
 def test_one_row_per_product(sixty5_structural: BimDataFrame) -> None:
@@ -213,10 +223,76 @@ def test_prefab_facade() -> None:
     assert bdf.crs["coordinate_system"]["axis"][0]["unit"]["name"] == "millimetre"
 
 
+def test_native_geom_holds_the_extruded_sweeps(sixty5_structural: BimDataFrame) -> None:
+    frame = sixty5_structural.frame
+    sweeps = frame.select("class", "bbox", n=pl.col("native_geom").list.len())
+    per_class = sweeps.group_by("class").agg(
+        pl.col("n").is_not_null().sum().alias("rows"), pl.col("n").sum().alias("sweeps")
+    )
+    counts = {klass: (rows, n) for klass, rows, n in per_class.iter_rows()}
+    # Every element whose body is extruded has its sweeps; the breps (4 beams, 8 columns, a
+    # slab, the 3 IfcWalls, a footing's surface model) do not
+    assert counts["IfcBeam"] == (350, 350)
+    assert counts["IfcColumn"] == (379, 379)  # mapped items of the column types
+    assert counts["IfcWallStandardCase"] == (296, 296)
+    assert counts["IfcSlab"] == (69, 69)
+    assert counts["IfcFooting"] == (105, 106)
+    assert counts["IfcPile"] == (146, 146)
+    assert counts["IfcOpeningElement"] == (1284, 1284)
+    assert counts["IfcBuildingElementProxy"] == (1, 21)  # the origin marker, a mapped block
+    assert counts["IfcBuildingStorey"] == (0, 0)
+    assert frame.filter(pl.col("mesh").is_null())["native_geom"].null_count() == 40
+    items = frame.select(pl.col("native_geom").explode().alias("sweep")).drop_nulls()
+    items = items.unnest("sweep")
+    assert len(items) == 350 + 379 + 296 + 69 + 106 + 146 + 1284 + 21
+    assert items["type"].unique().to_list() == ["IfcExtrudedAreaSolid"]
+    assert set(items["profile_type"].unique()) == {
+        "IfcArbitraryClosedProfileDef",
+        "IfcArbitraryProfileDefWithVoids",
+        "IfcCircleProfileDef",
+        "IfcIShapeProfileDef",
+        "IfcRectangleProfileDef",
+    }
+    assert items["clipped"].sum() == 11 + 20  # clipped beams and walls
+    assert (items["depth"] > 0).all()
+    directions = np.stack(items["direction"].to_numpy())
+    assert np.linalg.norm(directions, axis=1) == pytest.approx(1.0)
+    assert set(np.abs(directions[:, 2]).round(9)) == {1.0}  # every sweep goes along its own z
+    # A sweep's placement puts the profile where the mesh is: a column's profile centroid at
+    # the plan centre of its bounding box, its depth the height of the box
+    columns = frame.filter(pl.col("class") == "IfcColumn").filter(
+        pl.col("native_geom").is_not_null()
+    )
+    for sweep, bbox in zip(columns["native_geom"], columns["bbox"], strict=True):
+        (sweep,) = sweep
+        placement = np.array(sweep["placement"]).reshape(4, 4)
+        centroid = shapely.from_wkb(sweep["profile"]).centroid
+        placed = placement @ np.array([centroid.x, centroid.y, 0.0, 1.0])
+        assert placed[0] == pytest.approx((bbox["xmin"] + bbox["xmax"]) / 2, abs=0.02)
+        assert placed[1] == pytest.approx((bbox["ymin"] + bbox["ymax"]) / 2, abs=0.02)
+        assert sweep["depth"] == pytest.approx(bbox["zmax"] - bbox["zmin"])
+
+
+def test_the_attributes_set_holds_the_predefined_type(sixty5_structural: BimDataFrame) -> None:
+    frame = sixty5_structural.frame
+    attributes = frame["properties"].struct.field(ATTRIBUTES_PSET)
+    assert attributes.dtype == pl.Struct({"PredefinedType": pl.String})
+    predefined = frame.select("class", t=attributes.struct.field("PredefinedType"))
+    counts = {tuple(key): n for *key, n in predefined.group_by("class", "t").len().iter_rows()}
+    assert counts[("IfcSlab", "BASESLAB")] == 21
+    assert counts[("IfcSlab", "FLOOR")] == 49
+    assert counts[("IfcColumn", "COLUMN")] == 387  # IFC2X3 columns have none: their type's
+    assert counts[("IfcBeam", "BEAM")] == 354
+    assert counts[("IfcPile", "NOTDEFINED")] == 146
+    assert counts[("IfcWallStandardCase", "STANDARD")] == 291
+    assert counts[("IfcSite", None)] == 1
+
+
 @pytest.mark.slow
 def test_architectural() -> None:
-    """The ArchiCAD export: 16,784 products and 191 per-type property sets with 35,068
-    properties, so the dense properties Struct alone takes about 5.5 GB (see CLAUDE.md)."""
+    """The ArchiCAD export: 16,784 products and 191 per-type property sets (plus the
+    ``attributes`` set) with 35,068 properties, so the dense properties Struct alone takes
+    about 5.5 GB (see CLAUDE.md)."""
     bdf = read_ifc(data.fetch(data.SIXTY5_ARCHITECTURAL))
     # select the light columns first: a filter on the whole frame copies the properties
     frame = bdf.frame.select("id", "class", "mesh", "bbox")
@@ -229,4 +305,4 @@ def test_architectural() -> None:
     faces = style_faces(frame)
     assert faces["n_faces"].sum() == 1_671_713
     assert faces.filter(pl.col("n_faces") != pl.col("n_faces_styled")).is_empty()
-    assert len(bdf.frame.schema["properties"].to_schema()) == 191
+    assert len(bdf.frame.schema["properties"].to_schema()) == 191 + 1

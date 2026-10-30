@@ -407,14 +407,15 @@ def _three_point_arc(
     d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
     if abs(d) < 1e-12:
         return [start, end]
-    ux = ((ax**2 + ay**2) * (by - cy) + (bx**2 + by**2) * (cy - ay) + (cx**2 + cy**2) * (ay - by)) / d
-    uy = ((ax**2 + ay**2) * (cx - bx) + (bx**2 + by**2) * (ax - cx) + (cx**2 + cy**2) * (bx - ax)) / d
+    a2, b2, c2 = ax**2 + ay**2, bx**2 + by**2, cx**2 + cy**2
+    ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d
+    uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d
     radius = math.dist((ux, uy), start)
-    a0, a1, a2 = (math.atan2(y - uy, x - ux) for x, y in (start, middle, end))
-    sweep = (a2 - a0) % (2 * math.pi)
-    if (a1 - a0) % (2 * math.pi) > sweep:
+    first, through, last = (math.atan2(y - uy, x - ux) for x, y in (start, middle, end))
+    sweep = (last - first) % (2 * math.pi)
+    if (through - first) % (2 * math.pi) > sweep:
         sweep -= 2 * math.pi
-    angles = np.linspace(a0, a0 + sweep, max(2, math.ceil(abs(sweep) / _ARC_STEP) + 1))
+    angles = np.linspace(first, first + sweep, max(2, math.ceil(abs(sweep) / _ARC_STEP) + 1))
     return [(ux + radius * math.cos(a), uy + radius * math.sin(a)) for a in angles]
 
 
@@ -442,9 +443,7 @@ def _trim_point(
     t = float(trim[0].wrappedValue)
     origin = line.Pnt.Coordinates
     vector = line.Dir
-    ratios = np.array(vector.Orientation.DirectionRatios[:2], dtype=float) * float(
-        vector.Magnitude
-    )
+    ratios = np.array(vector.Orientation.DirectionRatios[:2], dtype=float) * float(vector.Magnitude)
     return (float(origin[0] + t * ratios[0]), float(origin[1] + t * ratios[1]))
 
 
