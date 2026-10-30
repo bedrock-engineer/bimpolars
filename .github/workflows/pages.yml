@@ -3,7 +3,8 @@ name: Pages
 # The demo page: Sixty5's structural model, read with read_ifc and placed with its Engineering
 # CRS, in specklewidgets' GeoSpeckleViewer beside a MapLibre map of the selected element's
 # footprint (the geog column). The page lives in bedrock-engineer/specklestuff (site/), which
-# publishes it too; this builds it from specklestuff's main, so both sites show the same page.
+# publishes it too; this builds it from specklestuff's main, so both sites show the same page,
+# each under its own title.
 on:
   push:
     branches: [main]
@@ -49,6 +50,9 @@ jobs:
       # specklestuff's site/sixty5.py turns PROJ's network on: PROJ fetches the NSGI grids from
       # cdn.proj.org, so that PDOK's 3D BAG stands on the map
       - run: just site
+        env:
+          # Over the title in specklestuff's site/.env
+          VITE_SITE_TITLE: "bimpolars: polars dataframes for BIM-data"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
