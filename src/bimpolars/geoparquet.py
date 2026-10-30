@@ -25,7 +25,7 @@ GEO_METADATA_KEY = "geo"
 GEOPARQUET_VERSION = "1.1.0"
 """The GeoParquet specification version the metadata follows."""
 
-GEOMETRY_COLUMNS: tuple[str, ...] = ("footprint",)
+GEOMETRY_COLUMNS: tuple[str, ...] = ("footprint", "lightbim")
 """The WKB geometry columns a BimDataFrame can hold; the first one present is the primary."""
 
 BBOX_COLUMN = "bbox"
