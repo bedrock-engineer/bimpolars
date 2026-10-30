@@ -20,14 +20,17 @@ import shapely
 pyproj = pytest.importorskip("pyproj")
 
 from bimpolars import BBOX_DTYPE, MESH_DTYPE, BimDataFrame, linear_unit, read_parquet  # noqa: E402
+from bimpolars.crs import CRS84H  # noqa: E402
 from bimpolars.frame import MODEL_COLUMNS  # noqa: E402
 from bimpolars.geobim import (  # noqa: E402
     AFFINE_TOLERANCE,
+    WKB_COLUMNS,
     affine_transformation,
     derived_engineering_crs,
     linearized_site_to_ecef,
     set_crs,
     to_crs,
+    with_geog,
 )
 from bimpolars.geoparquet import GEO_METADATA_KEY, geo_metadata  # noqa: E402
 from tests.synthetic import SPATIAL, box, model  # noqa: E402
@@ -93,6 +96,11 @@ SITES = [
     ),
 ]
 
+# The Sixty5 site origin in OGC:CRS84h: Strijp-S, Eindhoven. pyproj moves RD New
+# (160071.5, 384156.5) to (5.46015, 51.44648) through RDNAPTRANS2018; the Helmert fallback
+# without the NSGI grids lands within about a metre, 1e-5 degrees, of that
+SIXTY5_LON_LAT = (5.4602, 51.4465)
+
 SITE_POINTS = np.array(
     [
         [0.0, 0.0, 0.0],
@@ -118,6 +126,22 @@ def vertices(bdf: BimDataFrame) -> np.ndarray:
 
 def footprints(bdf: BimDataFrame) -> np.ndarray:
     return shapely.from_wkb(bdf.frame["footprint"].to_numpy())
+
+
+def geogs(bdf: BimDataFrame) -> np.ndarray:
+    return shapely.from_wkb(bdf.frame["geog"].to_numpy())
+
+
+def rd_to_geog(coordinates: np.ndarray) -> np.ndarray:
+    """The reference for geog: the closed-form IfcMapConversion of Sixty5 to RD New + NAP,
+    then pyproj to OGC:CRS84h. It is the operation with_geog runs (to_crs goes through the
+    base CRS), so the comparison is exact with or without the NSGI grids."""
+    transformer = pyproj.Transformer.from_crs("EPSG:7415", "OGC:CRS84h", always_xy=True)
+    return np.column_stack(transformer.transform(*SIXTY5.to_rd(coordinates).T))
+
+
+def coordinates(geometries: np.ndarray) -> np.ndarray:
+    return shapely.get_coordinates(geometries, include_z=True)
 
 
 COLUMN_FOOTPRINT = shapely.Polygon(
@@ -576,3 +600,182 @@ def test_the_core_imports_without_pyproj() -> None:
     lines = result.stdout.strip().splitlines()
     assert lines[0] == "ok"
     assert "bimpolars[geobim]" in lines[1]
+
+
+@pytest.fixture(scope="module")
+def sixty5_geog(sixty5_structural_features: BimDataFrame) -> BimDataFrame:
+    """The Sixty5 structural model georeferenced, with its footprints in OGC:CRS84h."""
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="the best transformation")
+        return with_geog(set_crs(sixty5_structural_features, SIXTY5.crs()))
+
+
+@pytest.mark.filterwarnings("ignore:Best transformation is not available")
+def test_with_geog_puts_sixty5_at_strijp_s(
+    sixty5_structural_features: BimDataFrame, sixty5_geog: BimDataFrame
+) -> None:
+    frame = sixty5_geog.frame
+    assert frame.columns == [*sixty5_structural_features.frame.columns, "geog"]
+    assert frame.schema["geog"] == pl.Binary
+    assert sixty5_geog.crs == SIXTY5.crs()  # the model stays in its site CRS
+    assert frame["footprint"].equals(sixty5_structural_features.frame["footprint"])
+    assert frame["mesh"].equals(sixty5_structural_features.frame["mesh"])
+    assert frame["geog"].null_count() == 40
+    assert (frame["geog"].is_null() == frame["footprint"].is_null()).all()
+
+    geog = geogs(sixty5_geog)
+    has = np.array([g is not None for g in geog])
+    assert has.sum() == 2647
+    assert shapely.has_z(geog[has]).all()
+    assert not shapely.is_empty(geog[has]).any()
+    site = footprints(sixty5_structural_features)
+    assert shapely.get_type_id(geog[has]).tolist() == shapely.get_type_id(site[has]).tolist()
+    assert shapely.get_num_coordinates(geog[has]).tolist() == (
+        shapely.get_num_coordinates(site[has]).tolist()
+    )
+
+    # Where: the model is within 100 m of the site origin (0.0015 degrees of longitude at
+    # 51.4 N), and the Helmert fallback without the NSGI grids is off by about a metre, 1e-5
+    # degrees, so a box of 0.002 degrees around Strijp-S holds with or without the grids
+    bounds = shapely.bounds(geog[has])
+    assert (np.abs(bounds[:, [0, 2]] - SIXTY5_LON_LAT[0]) < 0.002).all()
+    assert (np.abs(bounds[:, [1, 3]] - SIXTY5_LON_LAT[1]) < 0.002).all()
+
+    # Exactly: every coordinate is where the reference transformation puts it
+    expected = rd_to_geog(coordinates(site[has]))
+    got = coordinates(geog[has])
+    assert np.abs(got[:, :2] - expected[:, :2]).max() < 1e-9
+    assert np.abs(got[:, 2] - expected[:, 2]).max() < 1e-6
+
+    # Heights: the footprints lie at their storey's NAP level, and geog has that as an
+    # ellipsoidal height (NAP plus the geoid, 40 to 50 m at Eindhoven) when PROJ has the
+    # NSGI grids; without them its ballpark vertical step passes the NAP height through
+    levels = dict(sixty5_structural_features.frame.select("id", "elevation").iter_rows())
+    refs = frame["footprint_ref"].to_numpy()[has]
+    nap = np.repeat(
+        [SIXTY5.orthometric_height + 0.001 * levels[ref] for ref in refs],
+        shapely.get_num_coordinates(geog[has]),
+    )
+    group = pyproj.transformer.TransformerGroup("EPSG:7415", "OGC:CRS84h", always_xy=True)
+    if group.best_available:
+        assert 40 < (got[:, 2] - nap).min() and (got[:, 2] - nap).max() < 50
+    else:
+        assert np.abs(got[:, 2] - nap).max() < 1e-6
+
+
+def test_geog_is_the_primary_geoparquet_column_of_sixty5(
+    sixty5_geog: BimDataFrame, tmp_path
+) -> None:
+    frame = sixty5_geog.frame
+    geo = geo_metadata(frame, sixty5_geog.crs)
+    assert geo is not None
+    assert geo["primary_column"] == "geog"
+    assert list(geo["columns"]) == ["geog", "footprint"]
+    geog = geo["columns"]["geog"]
+    assert geog["crs"] == CRS84H
+    assert pyproj.CRS.from_json_dict(geog["crs"]) == pyproj.CRS("OGC:CRS84h")
+    assert sorted(geog["geometry_types"]) == ["MultiPolygon Z", "Polygon Z"]
+    assert "covering" not in geog  # bbox is in the site's millimetres, not in degrees
+    lon0, lat0, lon1, lat1 = geog["bbox"]
+    assert abs(lon0 - SIXTY5_LON_LAT[0]) < 0.002 and abs(lon1 - SIXTY5_LON_LAT[0]) < 0.002
+    assert abs(lat0 - SIXTY5_LON_LAT[1]) < 0.002 and abs(lat1 - SIXTY5_LON_LAT[1]) < 0.002
+    bounds = shapely.bounds(geogs(sixty5_geog))
+    assert [lon0, lat0] == pytest.approx(np.nanmin(bounds[:, :2], axis=0).tolist())
+    assert [lon1, lat1] == pytest.approx(np.nanmax(bounds[:, 2:], axis=0).tolist())
+    footprint = geo["columns"]["footprint"]
+    assert footprint["crs"] == SIXTY5.crs()
+    assert footprint["covering"]["bbox"]["xmin"] == ["bbox", "xmin"]
+
+    path = tmp_path / "sixty5_geog.parquet"
+    sixty5_geog.write_parquet(path)
+    assert json.loads(pl.read_parquet_metadata(path)[GEO_METADATA_KEY]) == geo
+    assert read_parquet(path).equals(sixty5_geog)
+
+    geopandas = pytest.importorskip("geopandas")
+    gdf = geopandas.read_parquet(path, columns=["id", "class", "geog"])
+    assert gdf.geometry.name == "geog"
+    assert gdf.crs == pyproj.CRS("OGC:CRS84h")
+    assert gdf.geometry.isna().sum() == 40
+    # GeoJSON as it is: longitude, latitude and a height in metres per coordinate
+    columns = gdf[gdf["class"] == "IfcColumn"].head(1)
+    feature = json.loads(columns.to_json())["features"][0]
+    assert feature["geometry"]["type"] == "Polygon"
+    lon, lat, z = feature["geometry"]["coordinates"][0][0]
+    assert abs(lon - SIXTY5_LON_LAT[0]) < 0.002 and abs(lat - SIXTY5_LON_LAT[1]) < 0.002
+    assert -12 < z < 130  # NAP -12..76 m, plus the geoid with the grids
+
+
+@pytest.mark.filterwarnings("ignore:the best transformation")
+def test_with_geog_on_a_column() -> None:
+    bdf = column_model(COLUMN_FOOTPRINT)
+    placed = with_geog(bdf)
+    frame = placed.frame
+    assert frame.columns == [*MODEL_COLUMNS, "footprint", "geog"]
+    assert frame["geog"].null_count() == 3
+    assert frame["footprint"].equals(bdf.frame["footprint"])
+    assert placed.crs == bdf.crs
+    geog = geogs(placed)[3]
+    assert geog.geom_type == "Polygon" and geog.has_z
+    expected = rd_to_geog(coordinates(COLUMN_FOOTPRINT))
+    got = coordinates(geog)
+    assert np.abs(got[:, :2] - expected[:, :2]).max() < 1e-9
+    assert np.abs(got[:, 2] - expected[:, 2]).max() < 1e-6
+    assert abs(got[0, 0] - SIXTY5_LON_LAT[0]) < 0.002 and abs(got[0, 1] - SIXTY5_LON_LAT[1]) < 0.002
+    # A second call replaces the column where it is
+    assert with_geog(placed).frame.columns == frame.columns
+    assert with_geog(placed).frame["geog"].equals(frame["geog"])
+    # An empty footprint gives an empty geog, not a null one
+    empty = with_geog(column_model(shapely.from_wkt("POLYGON Z EMPTY"))).frame["geog"]
+    assert empty.null_count() == 3
+    assert shapely.from_wkb(empty[3]).is_empty
+    assert int.from_bytes(empty[3][1:5], "little") == 1003  # ISO WKB: Polygon Z
+
+
+@pytest.mark.filterwarnings("ignore:the best transformation")
+def test_to_crs_leaves_geog_as_it_is() -> None:
+    assert "geog" not in WKB_COLUMNS
+    placed = with_geog(column_model(COLUMN_FOOTPRINT))
+    rd = to_crs(placed, "EPSG:7415")
+    assert rd.frame.columns == placed.frame.columns
+    assert rd.frame["geog"].equals(placed.frame["geog"])
+    assert not rd.frame["footprint"].equals(placed.frame["footprint"])
+    # with_geog on the moved model gives the same column again
+    assert np.abs(coordinates(geogs(with_geog(rd))[3]) - coordinates(geogs(placed)[3])).max() < 1e-9
+    # Moving the whole model to OGC:CRS84h puts the footprint where geog already is
+    geographic = to_crs(placed, "OGC:CRS84h")
+    assert geographic.frame["geog"].equals(placed.frame["geog"])
+    moved = coordinates(footprints(geographic)[3])
+    assert np.abs(moved - coordinates(geogs(placed)[3])).max() < 1e-9
+
+
+@pytest.mark.filterwarnings("ignore:the best transformation")
+def test_with_geog_refuses_what_it_cannot_place() -> None:
+    plain = plain_column_model()
+    with pytest.raises(ValueError, match="simple_features"):
+        with_geog(plain)
+    # A plain EngineeringCRS says nothing about where the model is on earth
+    unplaced = plain.with_frame(
+        plain.frame.with_columns(pl.Series("footprint", [None] * 4, dtype=pl.Binary))
+    )
+    with pytest.raises(ValueError, match="set_crs"):
+        with_geog(unplaced)
+    assert plain.crs["type"] == "EngineeringCRS"
+    not_wkb = column_model(COLUMN_FOOTPRINT)
+    not_wkb = not_wkb.with_frame(not_wkb.frame.with_columns(footprint=pl.lit("POLYGON EMPTY")))
+    with pytest.raises(TypeError, match="Binary"):
+        with_geog(not_wkb)
+
+
+def test_with_geog_warns_when_the_best_transformation_needs_missing_grids() -> None:
+    bdf = column_model(COLUMN_FOOTPRINT)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        group = pyproj.transformer.TransformerGroup("EPSG:7415", "OGC:CRS84h", always_xy=True)
+        with_geog(bdf)
+    about_grids = [w for w in caught if str(w.message).startswith("the best transformation")]
+    if group.best_available:
+        assert not about_grids
+    else:
+        assert len(about_grids) == 1
+        assert "nl_nsgi_rdtrans2018.tif" in str(about_grids[0].message)
+        assert about_grids[0].filename == __file__  # it points at the caller of with_geog
