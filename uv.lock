@@ -87,6 +87,11 @@ dependencies = [
     { name = "shapely" },
 ]
 
+[package.optional-dependencies]
+geobim = [
+    { name = "pyproj" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "duckdb" },
@@ -104,8 +109,10 @@ requires-dist = [
     { name = "ifcopenshell", specifier = ">=0.9.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "polars", specifier = ">=2.0" },
+    { name = "pyproj", marker = "extra == 'geobim'", specifier = ">=3.7" },
     { name = "shapely", specifier = ">=2.0" },
 ]
+provides-extras = ["geobim"]
 
 [package.metadata.requires-dev]
 dev = [

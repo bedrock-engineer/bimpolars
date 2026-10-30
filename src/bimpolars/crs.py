@@ -61,16 +61,7 @@ def engineering_crs(
     Raises:
         ValueError: If ``unit`` is a name :data:`LINEAR_UNITS` does not know.
     """
-    if isinstance(unit, str):
-        if unit not in LINEAR_UNITS:
-            known = ", ".join(LINEAR_UNITS)
-            raise ValueError(f"unknown unit {unit!r}; pass a LinearUnit or one of {known}")
-        unit = LinearUnit(unit, LINEAR_UNITS[unit])
-    unit_json = {
-        "type": "LinearUnit",
-        "name": unit.name,
-        "conversion_factor": float(unit.conversion_factor),
-    }
+    unit_json = unit_projjson(as_linear_unit(unit))
     axes = [
         {"name": "Easting", "abbreviation": "X", "direction": "east", "unit": unit_json},
         {"name": "Northing", "abbreviation": "Y", "direction": "north", "unit": unit_json},
@@ -82,6 +73,42 @@ def engineering_crs(
         "name": name,
         "datum": {"type": "EngineeringDatum", "name": datum},
         "coordinate_system": {"subtype": "Cartesian", "axis": axes},
+    }
+
+
+def as_linear_unit(unit: str | LinearUnit) -> LinearUnit:
+    """Resolves a unit given by name or as a :class:`LinearUnit`.
+
+    Args:
+        unit: A name from :data:`LINEAR_UNITS`, or a :class:`LinearUnit` for any other unit.
+
+    Returns:
+        The unit with its conversion factor to the metre.
+
+    Raises:
+        ValueError: If ``unit`` is a name :data:`LINEAR_UNITS` does not know.
+    """
+    if isinstance(unit, LinearUnit):
+        return unit
+    if unit not in LINEAR_UNITS:
+        known = ", ".join(LINEAR_UNITS)
+        raise ValueError(f"unknown unit {unit!r}; pass a LinearUnit or one of {known}")
+    return LinearUnit(unit, LINEAR_UNITS[unit])
+
+
+def unit_projjson(unit: LinearUnit) -> dict[str, Any]:
+    """The PROJJSON of a linear unit, as an axis or a parameter carries it.
+
+    Args:
+        unit: The unit.
+
+    Returns:
+        ``{"type": "LinearUnit", "name": ..., "conversion_factor": ...}``.
+    """
+    return {
+        "type": "LinearUnit",
+        "name": unit.name,
+        "conversion_factor": float(unit.conversion_factor),
     }
 
 
