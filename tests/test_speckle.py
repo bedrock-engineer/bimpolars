@@ -5,8 +5,6 @@ the bundles themselves (rvextract, schema 1.5)."""
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -26,8 +24,8 @@ from bimpolars import (
     version_objects,
 )
 from bimpolars.frame import MODEL_COLUMNS
-from bimpolars.speckle import BUNDLE_TABLES, LEVEL_CLASS, OBJECT_SET
-from tests.test_ifc import style_faces
+from bimpolars.speckle import LEVEL_CLASS, OBJECT_SET
+from tests.synthetic import run_without, style_faces
 
 INSTANCE_TYPE = "Speckle.Core.Models.Instances.InstanceProxy"
 IFC_GUID_SET = "properties.Parameters.Instance Parameters.IFC Parameters"
@@ -97,7 +95,9 @@ def test_fetch_bundle_gives_the_folder_of_tables() -> None:
     folder = data.fetch_bundle(data.RVT_SPECKLE_ARCH.bundle)
     assert folder.is_dir()
     names = {path.name for path in folder.glob("*.parquet")}
-    assert names == {f"advanced_sample_project_arch.{table}.parquet" for table in BUNDLE_TABLES}
+    assert names == {
+        f"advanced_sample_project_arch.{table}.parquet" for table in data.BUNDLE_TABLES
+    }
 
 
 def test_columns_and_crs(arch: BimDataFrame) -> None:
@@ -217,6 +217,7 @@ def test_properties(arch: BimDataFrame, arch_bare: BimDataFrame) -> None:
     assert len(psets) == 96
     assert sum(len(pset.to_schema()) for pset in psets.values()) == 633
     assert psets[OBJECT_SET].to_schema() == {"family": pl.String, "type": pl.String}
+    # the eav gives elementId as a double (130846.0), as specklepy's projection does
     assert psets["properties"].to_schema()["elementId"] == pl.Float64
     assert psets["properties"].to_schema()["builtInCategory"] == pl.String
     dimensions = psets["properties.Parameters.Instance Parameters.Dimensions"].to_schema()
@@ -334,12 +335,9 @@ def test_parquet_round_trip(structural: BimDataFrame, tmp_path: Path) -> None:
 
 
 def test_the_core_imports_without_specklepy() -> None:
-    code = (
-        "import sys; sys.modules['specklepy'] = None\n"
-        "import bimpolars, bimpolars.speckle\n"
-        "print(bimpolars.read_speckle.__module__)\n"
+    lines = run_without(
+        "specklepy",
+        "import bimpolars, bimpolars.data, bimpolars.speckle\n"
+        "print(bimpolars.read_speckle.__module__)\n",
     )
-    result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=True
-    )
-    assert result.stdout.strip() == "bimpolars.speckle"
+    assert lines == ["bimpolars.speckle"]

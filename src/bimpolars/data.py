@@ -15,8 +15,6 @@ import urllib.request
 from pathlib import Path
 from typing import NamedTuple
 
-from bimpolars.speckle import BUNDLE_TABLES
-
 DATA_URL = "http://r2.eu.bedrock.engineer/bimpolars/"
 """The bucket the data is downloaded from; a key is appended to it."""
 
@@ -36,9 +34,32 @@ RVT_ADVANCED_SAMPLE_ARCH = "rvt-advanced-sample-arch.ifc"
 """Revit Advanced Sample Project, architecture: IFC2X3 in millimetres, 5696 elements."""
 
 RVT_SPECKLE_V3_OBJECTS = "rvt-advanced-sample/speckle-v3-objects.parquet"
-"""The v3 objects of the three Revit Advanced Sample versions on app.speckle.systems, one row
-per object (``version_id``, ``object_id``, ``is_root``, ``content``), as
+"""The v3 objects of the Revit Advanced Sample versions on app.speckle.systems, one row per
+object (``version_id``, ``object_id``, ``is_root``, ``content``), as
 :func:`bimpolars.speckle.version_objects` reads them."""
+
+BUNDLE_TABLES: tuple[str, ...] = (
+    "eav.eav",
+    "eav.model",
+    "eav.object_type",
+    "eav.objects",
+    "eav.path_stats",
+    "eav.paths",
+    "eav.revit_external_links",
+    "eav.revit_views",
+    "eav.revit_warnings",
+    "eav.type_eav",
+    "eav.types",
+    "envelope.meta",
+    "envelope.node_kinds",
+    "envelope.nodes",
+    "envelope.rel_types",
+    "envelope.relations",
+    "envelope.scene_views",
+    "geometries",
+)
+"""The tables of a Revit bundle (rvextract schema 1.5), each a ``<name>.<table>.parquet`` file,
+which :func:`fetch_bundle` fetches."""
 
 
 class SpeckleVersion(NamedTuple):
@@ -129,7 +150,7 @@ def fetch_bundle(prefix: str, *, download: bool = True) -> Path:
 
     Args:
         prefix: The key prefix of the bundle's tables, such as ``RVT_SPECKLE_ARCH.bundle``:
-            every table of :data:`bimpolars.speckle.BUNDLE_TABLES` is fetched as
+            every table of :data:`BUNDLE_TABLES` is fetched as
             ``<prefix>.<table>.parquet``.
         download: Whether to download the tables that are not in :func:`data_dir`.
 

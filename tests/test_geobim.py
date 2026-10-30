@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import json
 import math
-import subprocess
-import sys
 import warnings
 from typing import Any, NamedTuple
 
@@ -30,7 +28,7 @@ from bimpolars.geobim import (  # noqa: E402
     to_crs,
 )
 from bimpolars.geoparquet import GEO_METADATA_KEY, geo_metadata  # noqa: E402
-from tests.synthetic import SPATIAL, box, model  # noqa: E402
+from tests.synthetic import SPATIAL, box, model, run_without  # noqa: E402
 
 
 class Site(NamedTuple):
@@ -559,20 +557,16 @@ def test_a_site_in_millimetres_and_one_in_metres_land_on_the_same_spot() -> None
 
 
 def test_the_core_imports_without_pyproj() -> None:
-    code = (
-        "import sys; sys.modules['pyproj'] = None\n"
+    lines = run_without(
+        "pyproj",
         "import bimpolars\n"
         "import bimpolars.data, bimpolars.features, bimpolars.geoparquet, bimpolars.gltf\n"
-        "import bimpolars.ifc\n"
+        "import bimpolars.ifc, bimpolars.speckle\n"
         "print(bimpolars.engineering_crs('ok')['name'])\n"
         "try:\n"
         "    import bimpolars.geobim\n"
         "except ImportError as error:\n"
-        "    print(error)\n"
+        "    print(error)\n",
     )
-    result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=True
-    )
-    lines = result.stdout.strip().splitlines()
     assert lines[0] == "ok"
     assert "bimpolars[geobim]" in lines[1]

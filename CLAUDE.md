@@ -12,7 +12,8 @@ model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` a
 `src/bimpolars/speckle.py` reads a Speckle version from its v3 objects: `version_objects`
 (Parquet or SQLite copy) and `read_speckle` (instances expanded, the bundle's categories,
 parameters and levels joined by applicationId). `src/bimpolars/mesh.py` holds the `Mesh` the
-readers end with and `mesh_frame`, which builds the `mesh` and `bbox` columns from it.
+readers end with, `Style`, `styled_mesh` (faces sorted by style) and `mesh_frame`, which builds
+the `mesh` and `bbox` columns from it.
 
 ## Rules
 
@@ -67,16 +68,25 @@ readers end with and `mesh_frame`, which builds the `mesh` and `bbox` columns fr
   definition content, which specklepy names `def-geo-<geometry index>` and
   `nested-inst-<n>`, left out), keyed by `applicationId` with `-instance-N` stripped, so a
   placement folds into its element's row and the same mesh (listed as a Mesh and as the
-  DataObject that displays it) counts once. `class` = the object's `category`, else the
-  bundle's category, else `speckle_type`. The property set of a value is the dotted path of
-  its group (`properties`, `properties.Parameters.Instance Parameters.Dimensions`, and
-  `object` for the object's own fields), the same for the object's bag and the bundle's eav
-  `path`; an eav row with a number and its text gives the number. Levels become rows
-  (`level-<node id>`, class `Levels`, `elevation` in model units) and `container` points at
-  them, so `simple_features` works on the result. Styles: the root's `renderMaterialProxies`
-  (first proxy that targets the mesh, the element or the instance wins), then the envelope's
-  `HAS_MATERIAL` for definition geometry. The CRS is the root's `units`, never the Revit
-  geolocation. No specklepy: the SGEO geometry of a bundle is not decoded here (#10).
+  DataObject that displays it) counts once. With a bundle, its `eav.objects` that the version
+  has no object for (curtain walls, room separations, MEP systems, wires, circuits) get rows
+  with a null `mesh`, so both readers give one row per element. `class` = the object's
+  `category`, else the bundle's category, else `speckle_type` (null when the object has none).
+  The property set of a value is the dotted path of its group (`properties`,
+  `properties.Parameters.Instance Parameters.Dimensions`, and `object` for the object's own
+  fields), the same for the object's bag and the bundle's eav `path`; an eav row with a number
+  and its text gives the number; values keep the unit the eav `unit` column states (lengths
+  mm, areas m², volumes m³), never scaled. Levels become rows (`level-<node id>`, class
+  `Levels`, `elevation` in model units) and `container` points at them, so `simple_features`
+  works on the result. Styles: the root's `renderMaterialProxies` (first proxy that targets
+  the mesh, the element or the instance wins), then the envelope's `HAS_MATERIAL` for
+  definition geometry. Every mesh of an element carries the element's applicationId, so a
+  layered wall or ceiling gets its first layer's material on all faces (#20 is the per-layer
+  follow-up through the envelope's `DISPLAY` order). The envelope's kinds and relations are
+  looked up by name in `envelope.node_kinds` and `envelope.rel_types`, with schema 1.5's
+  numbers as the fallback. The CRS is the root's `units`, else the bundle's, else the meshes'
+  most common, else metres; never the Revit geolocation. No specklepy: the SGEO geometry of a
+  bundle is not decoded here (#10).
 - `plan_outline` retries a union that GEOS's floating-point overlay fails on (one MEP stair
   mesh of 1376 faces does) with `grid_size` = the sliver fraction times the extent, which is
   the fixed-precision overlay that cannot fail.

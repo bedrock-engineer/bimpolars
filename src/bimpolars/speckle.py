@@ -27,7 +27,7 @@ import polars as pl
 
 from bimpolars.crs import LinearUnit, engineering_crs
 from bimpolars.frame import BimDataFrame
-from bimpolars.mesh import UNSTYLED_RGBA, Mesh, Rgba, mesh_frame, styled_mesh
+from bimpolars.mesh import UNSTYLED, Mesh, Style, mesh_frame, styled_mesh
 from bimpolars.properties import properties_series
 
 type SpeckleObject = dict[str, Any]
@@ -48,28 +48,6 @@ SPECKLE_UNITS: dict[str, LinearUnit] = {
     "mi": LinearUnit("mile", 1609.344),
 }
 """The length units Speckle objects name in their ``units`` field."""
-
-BUNDLE_TABLES: tuple[str, ...] = (
-    "eav.eav",
-    "eav.model",
-    "eav.object_type",
-    "eav.objects",
-    "eav.path_stats",
-    "eav.paths",
-    "eav.revit_external_links",
-    "eav.revit_views",
-    "eav.revit_warnings",
-    "eav.type_eav",
-    "eav.types",
-    "envelope.meta",
-    "envelope.node_kinds",
-    "envelope.nodes",
-    "envelope.rel_types",
-    "envelope.relations",
-    "envelope.scene_views",
-    "geometries",
-)
-"""The tables of a Revit bundle (schema 1.5), each a ``<name>.<table>.parquet`` file."""
 
 LEVEL_CLASS = "Levels"
 """The ``class`` of the rows :func:`read_speckle` adds for a bundle's levels."""
@@ -97,10 +75,16 @@ _GEOMETRY_DATA = frozenset({"vertices", "faces", "colors", "textureCoordinates",
 _CONSUMED_PATHS = frozenset({"name", "category", "units", "speckle_type"})
 
 _LEVEL_KIND = 5
+"""The envelope's node kind of a level, when ``envelope.node_kinds`` is not there to say (LEVEL)."""
 _MATERIAL_KIND = 3
+"""The envelope's node kind of a material (MATERIAL)."""
 _ON_LEVEL = 7
+"""The envelope's relation from an object to its level, when ``envelope.rel_types`` is not there
+to say (ON_LEVEL)."""
 _HAS_MATERIAL = 5
+"""The envelope's relation from a geometry to its material (HAS_MATERIAL)."""
 _SQLITE_CHUNK = 500
+"""Objects fetched per SQLite query, under the 999 variables an older SQLite allows."""
 
 _PLACEMENT_SOURCES = {
     "projectBasePoint": "Revit project base point",
@@ -119,7 +103,8 @@ def version_objects(
     - A Parquet file (or a DataFrame) with one row per object and the columns
       ``version_id``, ``object_id``, ``is_root`` and ``content`` (the object's JSON text), as
       ``rvt-advanced-sample/speckle-v3-objects.parquet`` has them. Other columns, such as
-      ``model_id`` and ``model_name``, are ignored.
+      ``model_id`` and ``model_name``, are ignored; a file is scanned, so only the row groups
+      that hold the version are read.
     - A SQLite database (``.db``, ``.sqlite`` or ``.sqlite3``, or an open connection) with the
       tables ``versions(version_id, v3_root_id, ...)`` and ``objects(hash, content)``: the
       ``v3_objects.db`` a Speckle download writes. The root's ``__closure`` names the
@@ -142,16 +127,21 @@ def version_objects(
         return _objects_from_sqlite(source, version)
     path = Path(source)
     if path.suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
-        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        connection = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
         try:
             return _objects_from_sqlite(connection, version)
         finally:
             connection.close()
-    return _objects_from_frame(pl.read_parquet(path), version)
+    return _objects_from_frame(pl.scan_parquet(path), version)
 
 
-def _objects_from_frame(frame: pl.DataFrame, version: str) -> list[SpeckleObject]:
-    rows = frame.filter(pl.col("version_id") == version).sort("is_root", descending=True)
+def _objects_from_frame(frame: pl.DataFrame | pl.LazyFrame, version: str) -> list[SpeckleObject]:
+    rows = (
+        frame.lazy()
+        .filter(pl.col("version_id") == version)
+        .sort("is_root", descending=True, maintain_order=True)
+        .collect()
+    )
     if rows.is_empty():
         raise ValueError(f"version {version!r} is not in the objects table")
     if not rows["is_root"][0] or rows["is_root"].sum() != 1:
@@ -205,7 +195,11 @@ def read_speckle(
     model's. A placement named ``<applicationId>-instance-N`` folds into the row of the
     element ``<applicationId>``, as does any other object with that applicationId, so an
     element placed several times, or placed and carrying geometry of its own, is one row with
-    one merged mesh.
+    one merged mesh. With a bundle, the elements the bundle knows but the version has no
+    object for (Revit elements the projection leaves out: curtain walls, room separations, MEP
+    systems, wires and circuits) get rows too, with the bundle's category, name, properties
+    and level and a null ``mesh``, so that the frame has one row per element of the model, as
+    :func:`bimpolars.read_ifc` has.
 
     The columns:
 
@@ -222,21 +216,27 @@ def read_speckle(
       (``Volume``), and :data:`OBJECT_SET` holds the object's own fields (``family``,
       ``type``). The path is the bundle's eav ``path`` column: ``f"{set}.{name}"``. With a
       bundle, the eav values (type parameters included, instance values winning) fill the
-      rows the objects leave bare, such as the instances.
+      rows the objects leave bare, such as the instances. A value keeps the unit Revit states
+      for its parameter (the eav ``unit`` column: lengths in millimetres, areas in square
+      metres, volumes in cubic metres); it is not scaled to the model unit.
     - ``container``: with a bundle, the ``id`` of the row's level (``level-<node id>``); the
       levels get rows of their own (class :data:`LEVEL_CLASS`) with their ``elevation``.
     - ``native_geom``: null.
     - ``mesh``: :data:`bimpolars.MESH_DTYPE` in model units, faces sorted by style; ``bbox``
       its bounds. Quads and n-gons are fan-triangulated. A style is the ``RenderMaterial`` of
       the root's ``renderMaterialProxies`` that targets the mesh's applicationId, the
-      element's, or the instance's (the first proxy that does, when several do), with its
-      ``diffuse`` ARGB and ``opacity``. A definition's mesh without one (specklepy's
-      projection gives none) gets, with a bundle, the material the envelope attaches to the
-      bundle geometry it came from (``def-geo-<geometry index>``). A mesh without either is
-      unstyled. A row whose geometry is only an instance of an empty definition has no mesh.
+      element's, or the instance's, with its ``diffuse`` ARGB and ``opacity``. The first proxy
+      that does wins when several do, which paints a layered wall, floor or ceiling (one proxy
+      per layer, all targeting the element) in its first layer's material. A definition's mesh
+      without one (specklepy's projection gives none) gets, with a bundle, the material the
+      envelope attaches to the bundle geometry it came from (``def-geo-<geometry index>``). A
+      mesh without either is unstyled. A ``displayValue`` reference to an object the version
+      does not include is skipped, so a row whose geometry is only such references, or only
+      an instance of an empty definition, has no mesh.
 
-    The CRS is a plain engineering CRS in the root's ``units`` (the bundle's when the root has
-    none): the model's own coordinates. A Revit model's geolocation is never used.
+    The CRS is a plain engineering CRS in the root's ``units``, else the bundle's, else the
+    unit most of the meshes name, else metres: the model's own coordinates. A Revit model's
+    geolocation is never used.
 
     Args:
         objects: The version's objects, root first, as :func:`version_objects` gives them.
@@ -248,8 +248,11 @@ def read_speckle(
         The model as a BimDataFrame.
 
     Raises:
-        ValueError: If the objects have no root, name a unit this module does not know, or
-            nest instance definitions in a cycle.
+        ValueError: If the objects have no root, name a unit this module does not know, nest
+            instance definitions in a cycle, lack a DataChunk an object refers to, or hold a
+            face list or an instance transform of the wrong length; or if the bundle folder is
+            missing, lacks ``eav.objects``, ``eav.paths`` or ``eav.eav``, or holds two tables
+            of one name.
     """
     if not objects:
         raise ValueError("no objects: the root object must come first")
@@ -292,7 +295,7 @@ class _Row:
 type _Part = tuple[
     np.ndarray[Any, np.dtype[np.float64]],
     np.ndarray[Any, np.dtype[np.int64]],
-    tuple[str | None, Rgba] | None,
+    Style | None,
 ]
 """A piece of a row's mesh: ``(n, 3)`` vertices in model units, ``(m, 3)`` faces and its
 style, None when the mesh has none of its own."""
@@ -326,7 +329,7 @@ class _Reader:
             for definition in self.definitions.values()
             for member in definition.get("objects") or []
         }
-        self.materials: dict[str, tuple[str | None, Rgba]] = {}
+        self.materials: dict[str, Style] = {}
         for proxy in root.get("renderMaterialProxies") or []:
             style = _material_style(proxy.get("value") or {})
             for target in proxy.get("objects") or []:
@@ -374,7 +377,13 @@ class _Reader:
         out: list[Any] = []
         for item in items:
             if isinstance(item, Mapping):
-                out.extend(self.referenced([item]).__next__().get("data") or [])
+                chunk = next(self.referenced([item]), None)
+                if chunk is None:
+                    raise ValueError(
+                        f"object {item.get('referencedId')!r} is missing: a DataChunk the "
+                        "version's objects do not include"
+                    )
+                out.extend(chunk.get("data") or [])
             else:
                 out.append(item)
         return out
@@ -382,16 +391,19 @@ class _Reader:
     def add(self, row: _Row, obj: Mapping[str, Any]) -> None:
         """Adds an element object's fields and geometry to its row."""
         app_id = obj.get("applicationId")
+        speckle_type = obj.get("speckle_type")
+        if not isinstance(speckle_type, str):
+            speckle_type = None  # a missing type stays missing, so that the class can be null
         if _is_type(obj, _INSTANCE_TYPE):
-            row.speckle_type = row.speckle_type or str(obj.get("speckle_type"))
+            row.speckle_type = row.speckle_type or speckle_type
             row.parts.extend(self.instance_parts(obj, set()))
             return
         if row.name is None and isinstance(obj.get("name"), str):
             row.name = obj["name"]
         if row.klass is None and isinstance(obj.get("category"), str):
             row.klass = obj["category"]
-        if row.speckle_type is None or _is_type(row, _INSTANCE_TYPE):
-            row.speckle_type = str(obj.get("speckle_type"))
+        if speckle_type is not None and (row.speckle_type is None or _is_type(row, _INSTANCE_TYPE)):
+            row.speckle_type = speckle_type  # an element's own type over its placements'
         for pset, values in _flatten(obj).items():
             target = row.fields.setdefault(pset, {})
             for key, value in values.items():
@@ -531,6 +543,7 @@ class _BundleInfo:
     def __init__(self, tables: _BundleTables) -> None:
         objects = tables.require("eav.objects")
         app_ids: dict[int, str] = dict(objects.select("object_index", "application_id").iter_rows())
+        self.app_ids: list[str] = list(dict.fromkeys(app_ids.values()))
         paths: dict[int, str] = dict(
             tables.require("eav.paths").select("path_index", "path").iter_rows()
         )
@@ -557,31 +570,39 @@ class _BundleInfo:
             self._take(app_id, own, typed)
         self.levels: list[tuple[str, str | None, float | None]] = []
         self.level_of: dict[str, str] = {}
-        self.geometry_styles: dict[int, tuple[str | None, Rgba]] = {}
+        self.geometry_styles: dict[int, Style] = {}
         nodes = tables.get("envelope.nodes")
         relations = tables.get("envelope.relations")
         if nodes is not None and relations is not None:
+            # the envelope's lookup tables name its kinds and relations; the numbers of schema
+            # 1.5 are the fallback for a bundle without them
+            kinds = tables.get("envelope.node_kinds")
+            rel_types = tables.get("envelope.rel_types")
+            material_kind = _code(kinds, "kind", "MATERIAL", _MATERIAL_KIND)
+            level_kind = _code(kinds, "kind", "LEVEL", _LEVEL_KIND)
+            has_material = _code(rel_types, "rel", "HAS_MATERIAL", _HAS_MATERIAL)
+            on_level = _code(rel_types, "rel", "ON_LEVEL", _ON_LEVEL)
             materials = {
                 node_id: _material_style({"name": material, "diffuse": argb, "opacity": opacity})
                 for node_id, material, argb, opacity in nodes.filter(
-                    pl.col("kind") == _MATERIAL_KIND
+                    pl.col("kind") == material_kind
                 )
                 .select("id", "name", "argb", "opacity")
                 .iter_rows()
             }
             for geometry, node_id in (
-                relations.filter(pl.col("rel") == _HAS_MATERIAL).select("src", "dst").iter_rows()
+                relations.filter(pl.col("rel") == has_material).select("src", "dst").iter_rows()
             ):
                 if node_id in materials:
                     self.geometry_styles.setdefault(geometry, materials[node_id])
             for node_id, level_name, elevation in (
-                nodes.filter(pl.col("kind") == _LEVEL_KIND)
+                nodes.filter(pl.col("kind") == level_kind)
                 .select("id", "name", "elevation")
                 .iter_rows()
             ):
                 self.levels.append((f"{LEVEL_ID_PREFIX}{node_id}", level_name, elevation))
             for object_index, node_id in (
-                relations.filter(pl.col("rel") == _ON_LEVEL).select("src", "dst").iter_rows()
+                relations.filter(pl.col("rel") == on_level).select("src", "dst").iter_rows()
             ):
                 if object_index in app_ids:
                     self.level_of[app_ids[object_index]] = f"{LEVEL_ID_PREFIX}{node_id}"
@@ -591,9 +612,7 @@ class _BundleInfo:
             for path, text, number, flag in model.select(
                 "path", "value_string", "value_double", "value_boolean"
             ).iter_rows():
-                self.model[path] = (
-                    text if text is not None else number if number is not None else flag
-                )
+                self.model[path] = _first_value(text, number, flag)
         self.units: str | None = self.model.get("modelPlacement.units") or self.model.get(
             "document.lengthUnit"
         )
@@ -602,7 +621,12 @@ class _BundleInfo:
         self.name: str | None = Path(str(file_name)).stem if file_name else None
 
     def _take(self, app_id: str, own: list[tuple[str, Any]], typed: list[tuple[str, Any]]) -> None:
-        """Files an object's eav values, its own winning over its type's, into sets."""
+        """Files an object's eav values, its own winning over its type's, into sets.
+
+        The set is the eav path up to its last dot, the key what follows it, so a group or
+        parameter named with a dot (``Nr. of risers``) splits there, where the object's own
+        bag, whose keys are whole, would not; the RVT samples have no such name.
+        """
         fields: dict[str, dict[str, Any]] = {}
         for path, value in [*own, *typed]:
             pset, _, key = path.rpartition(".")
@@ -617,6 +641,15 @@ class _BundleInfo:
             fields.setdefault(pset, {}).setdefault(key, value)
         if fields:
             self.fields[app_id] = fields
+
+
+def _code(table: pl.DataFrame | None, column: str, name: str, default: int) -> int:
+    """The number an envelope lookup table gives a kind or relation name, else the default."""
+    if table is not None and "name" in table.columns and column in table.columns:
+        found = table.filter(pl.col("name") == name)[column]
+        if len(found) == 1 and found[0] is not None:
+            return int(found[0])
+    return default
 
 
 def _eav_values(eav: pl.DataFrame, index: str) -> Iterator[tuple[int, int, Any]]:
@@ -643,7 +676,7 @@ def _first_value(text: str | None, number: float | None, flag: bool | None) -> A
 
 
 def _frame(rows: list[_Row], info: _BundleInfo | None, unit: LinearUnit) -> pl.DataFrame:
-    """Builds the model columns from the gathered rows and the bundle's levels."""
+    """Builds the model columns: the levels, the gathered rows, the bundle's other elements."""
     ids: list[str] = []
     names: list[str | None] = []
     classes: list[str | None] = []
@@ -689,6 +722,19 @@ def _frame(rows: list[_Row], info: _BundleInfo | None, unit: LinearUnit) -> pl.D
         else:
             positions.append(len(meshes))
             meshes.append(mesh)
+    if info is not None:
+        # the bundle's elements that the version has no object for: a row without a mesh
+        present = set(ids)
+        for app_id in info.app_ids:
+            if app_id in present:
+                continue
+            ids.append(app_id)
+            names.append(info.names.get(app_id))
+            classes.append(info.categories.get(app_id))
+            containers.append(info.level_of.get(app_id))
+            elevations.append(None)
+            fields.append(dict(info.fields.get(app_id, {})))
+            positions.append(None)
     geometry = mesh_frame(meshes)
     gather = pl.Series(positions, dtype=pl.UInt32)
     return pl.DataFrame(
@@ -710,14 +756,14 @@ def _row_mesh(parts: list[_Part]) -> Mesh | None:
     """Merges a row's parts into one mesh with its faces sorted by style."""
     if not parts:
         return None
-    styles: list[tuple[str | None, Rgba]] = []
-    style_index: dict[tuple[str | None, Rgba], int] = {}
+    styles: list[Style] = []
+    style_index: dict[Style, int] = {}
     vertex_blocks = []
     face_blocks = []
     id_blocks = []
     offset = 0
     for vertices, faces, style in parts:
-        key = style if style is not None else (None, UNSTYLED_RGBA)
+        key = style if style is not None else UNSTYLED
         if key not in style_index:
             style_index[key] = len(styles)
             styles.append(key)
@@ -740,9 +786,16 @@ def _row_key(obj: Mapping[str, Any]) -> str:
 
 
 def _is_type(obj: Any, suffix: str) -> bool:
-    """Whether an object's ``speckle_type`` (its last segment) is ``suffix``."""
+    """Whether an object's ``speckle_type`` names the class ``suffix``.
+
+    A type is a dotted name, or several chained with ``:`` from the base class down
+    (``Speckle.Core.Models.Collections.Collection:Objects.Other.Layer``); the last segment of
+    any of them counts.
+    """
     speckle_type = obj.speckle_type if isinstance(obj, _Row) else obj.get("speckle_type")
-    return isinstance(speckle_type, str) and speckle_type.rsplit(".", 1)[-1] == suffix
+    if not isinstance(speckle_type, str):
+        return False
+    return any(name.rsplit(".", 1)[-1] == suffix for name in speckle_type.split(":"))
 
 
 def _flatten(obj: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -813,7 +866,7 @@ def _transform(transform: Any, translation_scale: float) -> np.ndarray[Any, np.d
     return matrix
 
 
-def _material_style(material: Mapping[str, Any]) -> tuple[str | None, Rgba]:
+def _material_style(material: Mapping[str, Any]) -> Style:
     """A RenderMaterial as a style: its name and its diffuse colour with its opacity."""
     argb = material.get("diffuse")
     if isinstance(argb, int | float):
@@ -824,7 +877,7 @@ def _material_style(material: Mapping[str, Any]) -> tuple[str | None, Rgba]:
     opacity = material.get("opacity")
     alpha = float(opacity) if isinstance(opacity, int | float) else 1.0
     name = material.get("name")
-    return (str(name) if name else None, (rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, alpha))
+    return Style(str(name) if name else None, (rgb[0] / 255, rgb[1] / 255, rgb[2] / 255, alpha))
 
 
 def _unit(units: str) -> LinearUnit:
@@ -839,7 +892,11 @@ def _unit(units: str) -> LinearUnit:
 def _model_unit(
     root: Mapping[str, Any], objects: Sequence[Mapping[str, Any]], info: _BundleInfo | None
 ) -> LinearUnit:
-    """The model unit: the root's ``units``, else the bundle's, else the meshes' most common."""
+    """The model unit: the root's ``units``, else the bundle's, else the meshes' most common.
+
+    Without any of those the model is taken to be in metres, as :func:`bimpolars.read_ifc`
+    assumes for an IFC without a length unit.
+    """
     units = root.get("units")
     if isinstance(units, str) and units and units != "none":
         return _unit(units)
@@ -866,7 +923,6 @@ def _model_name(root: Mapping[str, Any], info: _BundleInfo | None) -> str:
 
 
 __all__ = [
-    "BUNDLE_TABLES",
     "LEVEL_CLASS",
     "LEVEL_ID_PREFIX",
     "OBJECT_SET",
