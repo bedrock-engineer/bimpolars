@@ -178,12 +178,14 @@ class BimDataFrame:
         ``{"version": 1, "crs": <PROJJSON>}``. Every column, nested ones included, reads back
         with its dtype through :func:`read_parquet`.
 
-        A frame with a ``footprint`` column (see :func:`bimpolars.simple_features`) is written
-        as GeoParquet: the file metadata also gets the ``geo`` entry of
-        :func:`bimpolars.geoparquet.geo_metadata`, with ``footprint`` as the primary geometry
-        in the model CRS and ``bbox`` named as its covering (the x and y fields each footprint
-        lies within), so that GeoParquet readers find the footprints with their CRS and skip
-        row groups for a spatial filter.
+        A frame with a geometry column of :data:`bimpolars.geoparquet.GEOMETRY_COLUMNS` is
+        written as GeoParquet: the file metadata also gets the ``geo`` entry of
+        :func:`bimpolars.geoparquet.geo_metadata`, with the first such column as the primary
+        geometry (``geog`` in OGC:CRS84h, from :func:`bimpolars.geobim.with_geog`, before
+        ``footprint`` in the model CRS, from :func:`bimpolars.simple_features`), each with its
+        CRS, and ``bbox`` named as the covering of the columns in the model CRS (the x and y
+        fields each footprint lies within), so that GeoParquet readers find the footprints
+        with their CRS and skip row groups for a spatial filter.
 
         Args:
             file: Where to write: a path or a binary file object.

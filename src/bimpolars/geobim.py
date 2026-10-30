@@ -3,8 +3,10 @@
 A model fresh from a reader sits in its own Cartesian coordinates, a plain EngineeringCRS.
 Georeferencing says where that is on earth: :func:`derived_engineering_crs` turns a site origin
 and a rotation on a projected plus vertical CRS such as EPSG:7415 (RD New + NAP) into an
-Engineering CRS that PROJ can transform, :func:`set_crs` labels a model with it, and
-:func:`to_crs` moves the geometry columns to any CRS pyproj knows.
+Engineering CRS that PROJ can transform, :func:`set_crs` labels a model with it,
+:func:`to_crs` moves the geometry columns to any CRS pyproj knows, and :func:`with_geog` adds
+the footprints in OGC:CRS84h next to the model's own, for GeoJSON and GeoParquet readers on
+the web.
 
 This module needs pyproj: install the ``[geobim]`` extra. The core of bimpolars does not import
 it.
@@ -34,20 +36,30 @@ except ImportError as error:
         "bimpolars.geobim needs pyproj: install the extra bimpolars[geobim]"
     ) from error
 
-from bimpolars.crs import PROJJSON_SCHEMA, LinearUnit, as_linear_unit, linear_unit, unit_projjson
+from bimpolars.crs import (
+    CRS84H,
+    PROJJSON_SCHEMA,
+    LinearUnit,
+    as_linear_unit,
+    linear_unit,
+    unit_projjson,
+)
 from bimpolars.features import _clamp_xy
 from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, NATIVE_GEOM_DTYPE, SWEEP_DTYPE, BimDataFrame
-from bimpolars.geoparquet import GEOMETRY_COLUMNS
+from bimpolars.geoparquet import COLUMN_CRS, GEOG_COLUMN, GEOMETRY_COLUMNS
 from bimpolars.lightbim import QA_DTYPE
 
 CRSLike = Mapping[str, Any] | pyproj.CRS | str | int
 """A CRS as PROJJSON, a ``pyproj.CRS``, or anything ``pyproj.CRS.from_user_input`` reads."""
 
-WKB_COLUMNS: tuple[str, ...] = tuple(column for column in GEOMETRY_COLUMNS if column != "geog")
+WKB_COLUMNS: tuple[str, ...] = tuple(
+    column for column in GEOMETRY_COLUMNS if column not in COLUMN_CRS
+)
 """The WKB columns in the model CRS that :func:`to_crs` moves, when present.
 
-They are the :data:`bimpolars.geoparquet.GEOMETRY_COLUMNS` without ``geog``, the footprints in
-OGC:CRS84h of bimpolars#7, which never change CRS.
+They are the :data:`bimpolars.geoparquet.GEOMETRY_COLUMNS` without the columns in a CRS of
+their own (:data:`bimpolars.geoparquet.COLUMN_CRS`): ``geog``, the footprints in OGC:CRS84h
+of :func:`with_geog`, never changes CRS.
 """
 
 AFFINE_TOLERANCE = 1e-6
@@ -384,6 +396,50 @@ def _place_sweeps(
         .cast(NATIVE_GEOM_DTYPE)
         .alias("native_geom")
     )["native_geom"]
+
+
+def with_geog(bdf: BimDataFrame) -> BimDataFrame:
+    """Adds ``geog``: the ``footprint`` of every row in OGC:CRS84h, for GeoJSON and the web.
+
+    ``geog`` is the footprint moved to longitude and latitude in degrees and ellipsoidal height
+    in metres on WGS 84 (:data:`bimpolars.crs.CRS84H`), as ISO WKB in a Binary column: a
+    ``POLYGON Z`` or ``MULTIPOLYGON Z``, null exactly when ``footprint`` is, and ``POLYGON Z
+    EMPTY`` where the footprint is. That is the CRS GeoJSON (RFC 7946) means by its
+    coordinates, so the column exports to GeoJSON as it is, and
+    :func:`bimpolars.geoparquet.geo_metadata` makes it the primary geometry column of the
+    written GeoParquet, with :data:`bimpolars.crs.CRS84H` as its CRS. The model keeps its own
+    CRS and its ``footprint`` next to it, and :func:`to_crs` leaves ``geog`` as it is;
+    :func:`bimpolars.simple_features` drops it when it computes the footprints again, so run
+    ``with_geog`` after it.
+
+    The transformation is the one :func:`to_crs` applies for ``"OGC:CRS84h"``, through the base
+    CRS of a derived Engineering CRS (see :func:`_transformer`), and it warns in the same way
+    when PROJ's best transformation needs grids that are not installed: without the NSGI grids
+    a Dutch site moves by a Helmert transformation that is good to about a metre, and its NAP
+    heights pass off as ellipsoidal ones.
+
+    Args:
+        bdf: The model with its ``footprint`` column (see :func:`bimpolars.simple_features`),
+            in a georeferenced CRS: the Engineering CRS of :func:`derived_engineering_crs`,
+            set with :func:`set_crs`, or any CRS pyproj can transform to WGS 84.
+
+    Returns:
+        The model with ``geog`` added (or replaced), in the same CRS.
+
+    Raises:
+        ValueError: If the frame has no ``footprint`` column, or pyproj knows no
+            transformation from the model CRS to WGS 84 (a plain EngineeringCRS is not
+            georeferenced: :func:`set_crs` it first), or a coordinate does not transform.
+        TypeError: If ``footprint`` is not Binary.
+    """
+    frame = bdf.frame
+    if "footprint" not in frame.columns:
+        raise ValueError(
+            "with_geog needs the footprint column: add it with bimpolars.simple_features first"
+        )
+    transformer, _, _, _ = _prepare(bdf, CRS84H)
+    geog = _transform_wkb(frame["footprint"], transformer).alias(GEOG_COLUMN)
+    return bdf.with_frame(frame.with_columns(geog))
 
 
 def affine_transformation(

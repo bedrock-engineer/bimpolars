@@ -13,6 +13,87 @@ from typing import Any, NamedTuple
 
 PROJJSON_SCHEMA = "https://proj.org/schemas/v0.7/projjson.schema.json"
 
+CRS84H: dict[str, Any] = {
+    "$schema": PROJJSON_SCHEMA,
+    "type": "GeographicCRS",
+    "name": "WGS 84 longitude-latitude-height",
+    "datum_ensemble": {
+        "name": "World Geodetic System 1984 ensemble",
+        "members": [
+            {
+                "name": "World Geodetic System 1984 (Transit)",
+                "id": {"authority": "EPSG", "code": 1166},
+            },
+            {
+                "name": "World Geodetic System 1984 (G730)",
+                "id": {"authority": "EPSG", "code": 1152},
+            },
+            {
+                "name": "World Geodetic System 1984 (G873)",
+                "id": {"authority": "EPSG", "code": 1153},
+            },
+            {
+                "name": "World Geodetic System 1984 (G1150)",
+                "id": {"authority": "EPSG", "code": 1154},
+            },
+            {
+                "name": "World Geodetic System 1984 (G1674)",
+                "id": {"authority": "EPSG", "code": 1155},
+            },
+            {
+                "name": "World Geodetic System 1984 (G1762)",
+                "id": {"authority": "EPSG", "code": 1156},
+            },
+            {
+                "name": "World Geodetic System 1984 (G2139)",
+                "id": {"authority": "EPSG", "code": 1309},
+            },
+            {
+                "name": "World Geodetic System 1984 (G2296)",
+                "id": {"authority": "EPSG", "code": 1383},
+            },
+        ],
+        "ellipsoid": {
+            "name": "WGS 84",
+            "semi_major_axis": 6378137,
+            "inverse_flattening": 298.257223563,
+        },
+        "accuracy": "2.0",
+        "id": {"authority": "EPSG", "code": 6326},
+    },
+    "coordinate_system": {
+        "subtype": "ellipsoidal",
+        "axis": [
+            {
+                "name": "Geodetic longitude",
+                "abbreviation": "Lon",
+                "direction": "east",
+                "unit": "degree",
+            },
+            {
+                "name": "Geodetic latitude",
+                "abbreviation": "Lat",
+                "direction": "north",
+                "unit": "degree",
+            },
+            {
+                "name": "Ellipsoidal height",
+                "abbreviation": "h",
+                "direction": "up",
+                "unit": "metre",
+            },
+        ],
+    },
+    "id": {"authority": "OGC", "code": "CRS84h"},
+}
+"""OGC:CRS84h as PROJJSON: longitude, latitude (degrees) and ellipsoidal height (metres) on WGS 84.
+
+The CRS of the ``geog`` column that :func:`bimpolars.geobim.with_geog` adds, and what GeoJSON
+means by its coordinates (RFC 7946: longitude, latitude and an elevation in metres above the
+WGS 84 ellipsoid). It is written out here, as ``pyproj.CRS("OGC:CRS84h").to_json_dict()`` gives
+it (PROJ 9.8), so that the core can label the column without pyproj.
+"""
+
 LINEAR_UNITS: dict[str, float] = {
     "metre": 1.0,
     "millimetre": 0.001,
