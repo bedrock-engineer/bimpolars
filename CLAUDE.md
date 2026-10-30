@@ -177,10 +177,12 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   `MultiPolygon Z` (a console whose two parts touch along an edge, up to rounding).
 - `sixty5_O-S1-BWK-BIM-architectural.ifc`: 343 MB, `slow`. ArchiCAD export: 16,784 products
   (16,760 with a mesh), 1,671,713 triangles, 191 property sets (one per library part) with
-  35,068 distinct properties. The dense `properties` Struct is 35,068 columns of 16,784 rows,
-  about 5.5 GB in memory (String columns cost 16 bytes per row whether null or not), so
-  `read_ifc` peaks near 8 GB and takes two minutes; without that column it needs 2.5 GB and
-  85 s. Select the columns you need before filtering such a frame. See #15 before changing
+  35,068 distinct properties, plus the `attributes` set. The dense `properties` Struct is
+  35,068 columns of 16,784 rows, about 5.5 GB in memory (String columns cost 16 bytes per row
+  whether null or not), so `read_ifc` peaks near 8 GB and takes two minutes (5.4 minutes in a
+  4-CPU cloud container); without that column it needs 2.5 GB and 85 s. `native_geom`: 2694
+  sweeps on 2681 rows (all 948 IfcWallStandardCase, 1143 of 4147 IfcCovering; the 6478
+  IfcWall are breps), 1 MB, 12 s of the read; the predefined types 1.3 s. Select the columns you need before filtering such a frame. See #15 before changing
   the layout of `properties`. Footprints take 40 s once `properties` is dropped: 15,697
   `Polygon Z`, 1063 `MultiPolygon Z`, 3 empty (two 2-triangle railings and a stair landing).
   The sliver rule of `plan_outline` (triangles under 1e-9 of the extent squared are left
