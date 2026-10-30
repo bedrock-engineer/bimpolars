@@ -52,12 +52,12 @@ geopandas.read_parquet("sixty5.parquet", columns=["id", "class", "footprint"]).c
 ```sh
 uv add bimpolars  # or: pip install bimpolars
 uv add "bimpolars[geobim]"  # with pyproj, for georeferencing
+uv add "bimpolars[speckle]"  # with specklepy, for Speckle bundles
 ```
 
 The core depends on polars, numpy, shapely and ifcopenshell. Georeferencing (pyproj) is the
-extra `[geobim]`. Reading a Speckle version from its v3 objects needs no specklepy (see
-[Speckle](#speckle)); receiving from a server and projecting bundles with specklepy will come
-as the extra `[speckle]`.
+extra `[geobim]`. Reading a Speckle version from its v3 objects needs no specklepy; projecting
+a Speckle bundle to those objects does, and is the extra `[speckle]` (see [Speckle](#speckle)).
 
 ## Functions
 
@@ -125,11 +125,25 @@ as the extra `[speckle]`.
 - `version_objects(source, version)`: the v3 objects of one version, root first, from a local
   copy: a Parquet file with `version_id`, `object_id`, `is_root` and `content` columns, or a
   SQLite database with `versions(version_id, v3_root_id)` and `objects(hash, content)`.
+- `bimpolars.bundle.bundle_objects(bundle)`: the v3 objects of a bundle-only version, projected
+  from its bundle (a folder of `<name>.<table>.parquet` files, or the bundle's URL in the
+  bimpolars bucket) with specklepy, the `[speckle]` extra; the placed elements keep the
+  geometry they carry themselves and definition geometry keeps its materials.
+  `bimpolars.bundle.bundle_model(bundle)` opens such a bundle as a specklepy `Model`. See
+  [Speckle](#speckle).
 - `bimpolars.data.fetch(key, *, download=True)`: the path of a test or example model, downloaded
   from `http://r2.eu.bedrock.engineer/bimpolars/` on first use into `bimpolars.data.data_dir()`:
-  `BIMPOLARS_DATA_DIR`, else `$XDG_CACHE_HOME/bimpolars`, else `~/.cache/bimpolars`.
-  `bimpolars.data.fetch_bundle(prefix)` fetches the tables of a Speckle bundle
-  (`bimpolars.data.BUNDLE_TABLES`) the same way and gives their folder.
+  `BIMPOLARS_DATA_DIR`, else `$XDG_CACHE_HOME/bimpolars`, else `~/.cache/bimpolars`. The key
+  may be given as its URL in the bucket. `bimpolars.data.fetch_bundle(prefix)` fetches the
+  tables of a Speckle bundle (`bimpolars.data.BUNDLE_TABLES`) the same way and gives their
+  folder; a bundle's overflow geometry shards (`<name>.geometries.<N>.parquet`, past 1.5 GiB
+  of geometry) are not among them, so read such a bundle from a complete folder.
+- `bimpolars.data.bucket_key(key_or_url)`: the key of a URL in the bucket (`http` or `https`,
+  percent-encoded or not), which `fetch` and `fetch_bundle` use; a URL outside the bucket, or
+  a key that would leave the data folder (absolute, a drive or `..`), raises `ValueError`.
+- `bimpolars.speckle.bundle_folder(bundle)`: the local folder of a bundle given as a folder or
+  as its URL in the bucket (fetched with `fetch_bundle`), as `read_speckle` and
+  `bimpolars.bundle` take it.
 
 ## Georeferencing
 
@@ -212,7 +226,7 @@ transformation that is good to about a metre, and passes NAP heights off as elli
 
 ## GeoParquet
 
-`write_parquet` on a frame with a `geog` or `footprint` column writes
+`write_parquet` on a frame with a `geog`, `footprint` or `lightbim` column writes
 [GeoParquet 1.1](https://geoparquet.org): the file metadata gets a `geo` entry
 (`bimpolars.geoparquet.geo_metadata`) that lists each of them WKB encoded with its geometry
 types and its CRS as PROJJSON: `footprint` in the model CRS, `geog` in OGC:CRS84h. The first
@@ -239,8 +253,8 @@ LOAD spatial;  -- DuckDB
 SELECT id, ST_Area(footprint) FROM read_parquet('sixty5.parquet') WHERE bbox.xmax < 10000;
 ```
 
-`lightbim` is a second GeoParquet geometry column with the same CRS and covering: every
-reduction lies within its row's `bbox`. `mesh` and `native_geom` are not GeoParquet
+`lightbim` is a GeoParquet geometry column too, listed after `footprint` with the same CRS and
+covering: every reduction lies within its row's `bbox`. `mesh` and `native_geom` are not GeoParquet
 geometries; they share the model CRS implicitly.
 
 ## LightBIM
@@ -334,8 +348,9 @@ Path("structure.glb").write_bytes(bimpolars.element_meshes_glb(structure))
 `read_speckle` reads a [Speckle](https://speckle.systems) version without specklepy, from the
 version's v3 objects: the JSON graph of a root collection, `DataObject`s with their
 `displayValue` meshes, and instances (`InstanceProxy`, `InstanceDefinitionProxy`). The objects
-come from a local copy of a Speckle download; `bimpolars.bundle` (coming, the `[speckle]`
-extra) will receive them and project a bundle to them with specklepy.
+come from a local copy of a Speckle download (`version_objects`), or from the version's
+*bundle*, the Parquet tables Speckle 4 publishes instead, projected with specklepy by
+`bimpolars.bundle.bundle_objects` (the `[speckle]` extra).
 
 ```python
 import polars as pl
@@ -354,6 +369,12 @@ bdf.frame.filter(pl.col("class") == "Walls").select(
     .struct.field("properties.Parameters.Instance Parameters.Dimensions")
     .struct.field("Volume"),
 )
+
+from bimpolars.bundle import bundle_objects  # the [speckle] extra
+
+bundle = f"{data.DATA_URL}{arch.bundle}"  # the bundle's folder, or its URL in the bucket
+same = bimpolars.read_speckle(bundle_objects(bundle), bundle)
+same.equals(bdf)  # True: the bucket's objects were projected the same way
 ```
 
 - One row per element: the objects under the root's `elements`, collections traversed, the
@@ -398,6 +419,15 @@ bdf.frame.filter(pl.col("class") == "Walls").select(
   bundle's `modelPlacement.options.sharedCoordinates.transform`; on the RVT Advanced Sample
   the plan extents then agree to the micrometre and 85 % of the elements matched by IfcGUID
   within 1 mm.
+- `bundle_objects` projects a bundle on disk with specklepy's `Model.to_base()`, serialized as
+  a Speckle send would, and restores two things that projection loses. An element placed as
+  an instance keeps the geometry it carries itself: Revit puts structural framing, columns and
+  foundations on the element with an empty definition (841 of the 935 elements of the
+  structural sample), which `to_base` leaves without geometry; it becomes a DataObject under
+  the element's id, the first placement is renamed `<id>-instance-0`, and the two fold into
+  one row. And the geometry of an instance definition gets the material the envelope attaches
+  to it, so family instances are coloured without the bundle at hand. The bucket's
+  `speckle-v3-objects.parquet` was projected this way, so both routes give equal frames.
 
 ## Develop
 

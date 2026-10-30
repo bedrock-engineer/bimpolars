@@ -74,7 +74,7 @@ def with_geog_column(
 def test_geog_is_the_primary_column_in_its_own_crs(small: BimDataFrame, tmp_path: Path) -> None:
     """A geog column (bimpolars.geobim.with_geog) comes first, in OGC:CRS84h, with the bounds
     of its own coordinates and without the model-CRS bbox as its covering."""
-    assert GEOMETRY_COLUMNS == ("geog", "footprint")
+    assert GEOMETRY_COLUMNS == ("geog", "footprint", "lightbim")
     assert COLUMN_CRS == {"geog": CRS84H}
     squares = [
         None,

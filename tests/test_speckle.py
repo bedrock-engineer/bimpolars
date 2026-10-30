@@ -29,9 +29,9 @@ from bimpolars import (
 )
 from bimpolars.frame import MODEL_COLUMNS
 from bimpolars.speckle import LEVEL_CLASS, OBJECT_SET
+from tests.speckle_helpers import INSTANCE_TYPE, faces_by_row, own_geometry_and_placements
 from tests.synthetic import run_without, style_faces
 
-INSTANCE_TYPE = "Speckle.Core.Models.Instances.InstanceProxy"
 IFC_GUID_SET = "properties.Parameters.Instance Parameters.IFC Parameters"
 IFC_VERSION = "5cb009bb77"
 """The fourth version of the Parquet: rvt-advanced-sample-arch.ifc received by Speckle."""
@@ -91,35 +91,6 @@ def extent(frame: pl.DataFrame) -> np.ndarray:
             bbox.field("zmax").max(),
         ).row(0)
     )
-
-
-def faces_by_row(frame: pl.DataFrame) -> dict[str, int]:
-    """The face count of every row that has a mesh."""
-    n_faces = pl.col("mesh").struct.field("faces").list.len() // 3
-    return dict(frame.filter(pl.col("mesh").is_not_null()).select("id", n_faces).iter_rows())
-
-
-def own_geometry_and_placements(objects: list[dict]) -> dict[str, list[int]]:
-    """The elements that have geometry of their own and a placement, with the number of
-    objects in each placement's definition."""
-    root = objects[0]
-    definitions = {
-        proxy["applicationId"]: proxy.get("objects") or []
-        for proxy in root["instanceDefinitionProxies"]
-    }
-    content = {member for members in definitions.values() for member in members}
-    own: set[str] = set()
-    placed: dict[str, list[int]] = {}
-    for obj in objects[1:]:
-        app_id = obj.get("applicationId")
-        if app_id in content:
-            continue
-        base = app_id.split("-instance-")[0] if app_id else obj["id"]
-        if obj.get("speckle_type") == INSTANCE_TYPE:
-            placed.setdefault(base, []).append(len(definitions[obj["definitionId"]]))
-        elif obj.get("displayValue"):
-            own.add(base)
-    return {base: sizes for base, sizes in placed.items() if base in own}
 
 
 def test_version_objects(
@@ -497,6 +468,13 @@ def test_the_core_imports_without_specklepy() -> None:
     lines = run_without(
         "specklepy",
         "import bimpolars, bimpolars.data, bimpolars.speckle\n"
-        "print(bimpolars.read_speckle.__module__)\n",
+        "print(bimpolars.read_speckle.__module__)\n"
+        "try:\n"
+        "    import bimpolars.bundle\n"
+        "except ImportError as error:\n"
+        "    print(error)\n",
     )
-    assert lines == ["bimpolars.speckle"]
+    assert lines == [
+        "bimpolars.speckle",
+        "bimpolars.bundle needs specklepy: install the extra bimpolars[speckle]",
+    ]

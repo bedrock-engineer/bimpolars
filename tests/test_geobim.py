@@ -898,3 +898,24 @@ def test_with_geog_warns_when_the_best_transformation_needs_missing_grids() -> N
         assert len(about_grids) == 1
         assert "nl_nsgi_rdtrans2018.tif" in str(about_grids[0].message)
         assert about_grids[0].filename == __file__  # it points at the caller of with_geog
+
+
+@pytest.mark.filterwarnings("ignore:the best transformation")
+def test_geog_and_lightbim_are_geoparquet_geometries_together(tmp_path) -> None:
+    bdf = with_geog(simple_features(native_geom_model(), lightbim=True))
+    path = tmp_path / "both.parquet"
+    bdf.write_parquet(path)
+    geo = json.loads(pl.read_parquet_metadata(path)[GEO_METADATA_KEY])
+    assert geo["primary_column"] == "geog"
+    assert list(geo["columns"]) == ["geog", "footprint", "lightbim"]
+    assert geo["columns"]["lightbim"]["crs"] == bdf.crs
+    assert geo["columns"]["lightbim"]["covering"]["bbox"]["xmin"] == ["bbox", "xmin"]
+    assert read_parquet(path).equals(bdf)
+    # simple_features drops geog, which belonged to the old footprints, and adds lightbim again
+    again = simple_features(bdf, lightbim=True)
+    assert "geog" not in again.frame.columns
+    assert again.frame["lightbim"].equals(bdf.frame["lightbim"])
+    # to_crs moves lightbim and leaves geog as it is
+    rd = to_crs(bdf, "EPSG:7415")
+    assert rd.frame["geog"].equals(bdf.frame["geog"])
+    assert not rd.frame["lightbim"].equals(bdf.frame["lightbim"])
