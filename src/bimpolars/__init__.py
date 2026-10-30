@@ -6,7 +6,12 @@ one model CRS, stored as PROJJSON. :func:`read_ifc` fills it from an IFC file an
 :func:`simple_features` adds the plan footprint of every element, :func:`element_meshes_glb`
 writes the meshes as glTF, and :func:`read_parquet` reads a model back from the (Geo)Parquet
 that :meth:`BimDataFrame.write_parquet` wrote.
+
+:func:`read_ifc` needs ifcopenshell, the extra ``bimpolars[ifc]``: ``bimpolars.ifc`` is imported
+when ``read_ifc`` is first looked up, so the rest of the package works without it.
 """
+
+from typing import TYPE_CHECKING, Any
 
 from bimpolars.crs import LinearUnit, engineering_crs, linear_unit
 from bimpolars.features import FEATURE_COLUMNS, FOOTPRINT_DTYPE, plan_outline, simple_features
@@ -20,10 +25,12 @@ from bimpolars.frame import (
     read_parquet,
 )
 from bimpolars.gltf import element_meshes_glb, triangles_glb
-from bimpolars.ifc import read_ifc
 from bimpolars.lightbim import LIGHTBIM_COLUMNS
 from bimpolars.properties import properties_series
 from bimpolars.speckle import read_speckle, version_objects
+
+if TYPE_CHECKING:
+    from bimpolars.ifc import read_ifc
 
 __version__ = "0.1.0"
 
@@ -50,3 +57,12 @@ __all__ = [
     "triangles_glb",
     "version_objects",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Imports :mod:`bimpolars.ifc`, and so ifcopenshell, when ``read_ifc`` is first used."""
+    if name == "read_ifc":
+        from bimpolars.ifc import read_ifc
+
+        return read_ifc
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
