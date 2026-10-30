@@ -21,7 +21,7 @@ import numpy as np
 import numpy.typing as npt
 import polars as pl
 
-from bimpolars.crs import linear_unit
+from bimpolars.crs import _linear_unit
 from bimpolars.frame import BimDataFrame
 
 GLTF_VERSION = "2.0"
@@ -70,7 +70,7 @@ def element_meshes_glb(bdf: BimDataFrame, *, normals: bool = True) -> bytes:
 
     Every row with a mesh is written, except the :data:`EXCLUDED_CLASSES` (an
     ``IfcOpeningElement`` carries the mesh of the void it cuts). The vertices go from the
-    model's length unit (:func:`bimpolars.linear_unit` of the CRS) to glTF's metres. The faces
+    model's length unit (the unit of the CRS's axes) to glTF's metres. The faces
     are grouped by style, ``(name, rgba)`` of the mesh's ``styles``, into one primitive each,
     with one material per style of that name and colour (``alphaMode`` BLEND when the colour is
     translucent, double sided, matte), so that a viewer renders the model the way its authoring
@@ -106,7 +106,7 @@ def element_meshes_glb(bdf: BimDataFrame, *, normals: bool = True) -> bytes:
     frame = bdf.frame
     if "mesh" not in frame.columns:
         raise ValueError("element_meshes_glb needs the mesh column")
-    scale = linear_unit(bdf.crs).conversion_factor
+    scale = _linear_unit(bdf.projjson).conversion_factor
     # Select before filtering: a filter copies every column, and properties can be gigabytes
     columns = [name for name in ("class", "mesh") if name in frame.columns]
     keep = pl.col("mesh").is_not_null()
@@ -115,7 +115,7 @@ def element_meshes_glb(bdf: BimDataFrame, *, normals: bool = True) -> bytes:
         keep &= ~pl.col("class").cast(pl.String).is_in(EXCLUDED_CLASSES).fill_null(False)
     meshes = frame.select(columns).filter(keep)["mesh"]
     vertices, faces, materials, face_material = _geometry(meshes, scale)
-    glb = _Glb(name=bdf.crs.get("name"), extras={"crs": bdf.crs, "unit": UNIT})
+    glb = _Glb(name=bdf.projjson.get("name"), extras={"crs": bdf.projjson, "unit": UNIT})
     if len(vertices) == 0:
         return glb.to_bytes()
     vertices = glb.centre(vertices)

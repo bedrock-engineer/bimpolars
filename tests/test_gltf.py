@@ -21,9 +21,9 @@ from bimpolars import (
     BimDataFrame,
     element_meshes_glb,
     engineering_crs,
-    linear_unit,
     triangles_glb,
 )
+from bimpolars.crs import as_linear_unit
 from bimpolars.gltf import _FLOAT, _UNSIGNED_INT, _UNSIGNED_SHORT, UNIT, Y_UP_ROTATION
 from tests.synthetic import SPATIAL, box, merged, model
 
@@ -99,7 +99,7 @@ def corner_set(triangles: Any) -> set[tuple[float, ...]]:
 def mesh_corners(bdf: BimDataFrame, row_id: str) -> Any:
     """A row's triangles as (n, 3, 3) corners in metres, from the mesh column."""
     mesh = bdf.frame.filter(pl.col("id") == row_id)["mesh"][0]
-    scale = linear_unit(bdf.crs).conversion_factor
+    scale = as_linear_unit(bdf.projjson).conversion_factor
     vertices = np.asarray(mesh["vertices"]).reshape(-1, 3) * scale
     return vertices[np.asarray(mesh["faces"]).reshape(-1, 3)]
 
@@ -209,7 +209,7 @@ def test_scene_is_in_metres_and_y_up(styled_model: BimDataFrame) -> None:
     root, child = gltf["nodes"]
     assert root["rotation"] == pytest.approx(Y_UP_ROTATION)
     assert root["name"] == "Synthetic"
-    assert root["extras"] == {"crs": styled_model.crs, "unit": UNIT}
+    assert root["extras"] == {"crs": styled_model.projjson, "unit": UNIT}
     assert "mesh" not in root
     assert child["translation"] == pytest.approx([2.5, 0.25, 1.5])
     position = gltf["accessors"][gltf["meshes"][0]["primitives"][0]["attributes"]["POSITION"]]
@@ -342,7 +342,7 @@ def test_sixty5_structural_glb(sixty5_structural: BimDataFrame) -> None:
     assert counts == {"vertices": 89_740, "faces": 177_130}
     styles = rows.select(struct_.field("styles")).explode("styles").unnest("styles")
     assert len(styles.select("name", "rgba").unique()) == 12
-    scale = linear_unit(sixty5_structural.crs).conversion_factor
+    scale = as_linear_unit(sixty5_structural.projjson).conversion_factor
     assert scale == 0.001
 
     glb = element_meshes_glb(sixty5_structural)

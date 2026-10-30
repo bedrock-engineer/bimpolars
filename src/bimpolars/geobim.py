@@ -7,50 +7,38 @@ Engineering CRS that PROJ can transform, :func:`set_crs` labels a model with it,
 :func:`to_crs` moves the geometry columns to any CRS pyproj knows, and :func:`with_geog` adds
 the footprints in OGC:CRS84h next to the model's own, for GeoJSON and GeoParquet readers on
 the web.
-
-This module needs pyproj: install the ``[geobim]`` extra. The core of bimpolars does not import
-it.
 """
 
 from __future__ import annotations
 
 import functools
-import json
 import math
 import os
 import warnings
-from collections.abc import Mapping
 from typing import Any, Protocol
 
 import numpy as np
 import polars as pl
+import pyproj
+import pyproj.exceptions
 import shapely
-
-try:
-    import pyproj
-    import pyproj.exceptions
-    from pyproj.crs import CompoundCRS
-    from pyproj.transformer import TransformerGroup
-except ImportError as error:
-    raise ImportError(
-        "bimpolars.geobim needs pyproj: install the extra bimpolars[geobim]"
-    ) from error
+from pyproj.crs import CompoundCRS
+from pyproj.transformer import TransformerGroup
 
 from bimpolars.crs import (
     CRS84H,
     PROJJSON_SCHEMA,
+    CRSLike,
     LinearUnit,
+    _linear_unit,
     as_linear_unit,
-    linear_unit,
+    resolve_crs,
     unit_projjson,
 )
 from bimpolars.features import _clamp_xy
 from bimpolars.frame import BBOX_DTYPE, MESH_DTYPE, NATIVE_GEOM_DTYPE, SWEEP_DTYPE, BimDataFrame
 from bimpolars.geoparquet import COLUMN_CRS, GEOG_COLUMN, GEOMETRY_COLUMNS
 from bimpolars.lightbim import QA_DTYPE
-
-CRSLike = Mapping[str, Any] | pyproj.CRS | str | int
-"""A CRS as PROJJSON, a ``pyproj.CRS``, or anything ``pyproj.CRS.from_user_input`` reads."""
 
 WKB_COLUMNS: tuple[str, ...] = tuple(
     column for column in GEOMETRY_COLUMNS if column not in COLUMN_CRS
@@ -84,9 +72,9 @@ def derived_engineering_crs(
     orthometric_height: float,
     rotation: float,
     *,
-    unit: str | LinearUnit,
+    unit: LinearUnit | CRSLike | BimDataFrame,
     name: str = "Site",
-) -> dict[str, Any]:
+) -> pyproj.CRS:
     """Derives an Engineering CRS from a projected plus vertical CRS by georeferencing parameters.
 
     The site origin (0, 0, 0) lands on ``(easting, northing)`` in the projected CRS and on
@@ -110,19 +98,21 @@ def derived_engineering_crs(
         rotation: The angle in degrees from grid north to the site's y-axis, counterclockwise
             positive; equally, from grid east to the site's x-axis. Grid north, not true north.
             For an IfcMapConversion it is ``degrees(atan2(XAxisOrdinate, XAxisAbscissa))``.
-        unit: The site's length unit: a name from :data:`bimpolars.crs.LINEAR_UNITS` or a
-            :class:`bimpolars.LinearUnit`, typically ``linear_unit(bdf.crs)``.
+        unit: The site's length unit: the model whose site it is (``unit=bdf``), whose unit
+            it copies, or any other unit :func:`bimpolars.crs.as_linear_unit` takes: a name
+            from :data:`bimpolars.crs.LINEAR_UNITS`, a :class:`bimpolars.LinearUnit`, or a
+            CRS.
         name: The site's name, used in the names of the CRS and its parts.
 
     Returns:
-        The Engineering CRS as a PROJJSON dict, for :func:`set_crs`.
+        The Engineering CRS, for :func:`set_crs`.
 
     Raises:
         ValueError: If ``base_crs`` is not a compound CRS of a projected and a vertical CRS
-            that PROJ can derive from, or ``unit`` is a name :data:`bimpolars.crs.LINEAR_UNITS`
-            does not know.
+            that PROJ can derive from, or ``unit`` is neither a unit nor a CRS with a linear
+            unit.
     """
-    base, _ = _resolve(base_crs)
+    base, _ = resolve_crs(base_crs)
     components = base.sub_crs_list
     if len(components) != 2 or not components[0].is_projected or not components[1].is_vertical:
         raise ValueError(
@@ -210,10 +200,9 @@ def derived_engineering_crs(
         "components": [site_grid, site_z],
     }
     try:
-        pyproj.CRS.from_json_dict(crs)  # fails early on a base CRS PROJ cannot derive from
+        return pyproj.CRS.from_json_dict(crs)
     except pyproj.exceptions.CRSError as error:
         raise ValueError(f"PROJ cannot build the Engineering CRS: {error}") from error
-    return crs
 
 
 def set_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
@@ -233,7 +222,7 @@ def set_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
     Raises:
         ValueError: If pyproj cannot read ``crs``, or it does not have three axes.
     """
-    parsed, projjson = _resolve(crs)
+    parsed, projjson = resolve_crs(crs)
     _check_3d(parsed)
     return BimDataFrame(bdf.frame, projjson)
 
@@ -487,8 +476,8 @@ def linearized_site_to_ecef(crs: CRSLike) -> np.ndarray[Any, np.dtype[np.float64
         ValueError: If the CRS's axes are not in a linear unit, or pyproj knows no
             transformation from it to ECEF.
     """
-    source, projjson = _resolve(crs)
-    unit = linear_unit(projjson)
+    source, projjson = resolve_crs(crs)
+    unit = _linear_unit(projjson)
     to_ecef = _transformer(source, pyproj.CRS("EPSG:4978"))
     # One metre along each site axis, in site units
     origin_and_axes = (
@@ -501,20 +490,6 @@ def linearized_site_to_ecef(crs: CRSLike) -> np.ndarray[Any, np.dtype[np.float64
     return matrix
 
 
-def _resolve(crs: CRSLike) -> tuple[pyproj.CRS, dict[str, Any]]:
-    """Reads a CRS with pyproj and gives its PROJJSON: the caller's own when it passed one."""
-    try:
-        if isinstance(crs, pyproj.CRS):
-            return crs, crs.to_json_dict()
-        if isinstance(crs, Mapping):
-            projjson: dict[str, Any] = json.loads(json.dumps(crs))
-            return pyproj.CRS.from_json_dict(projjson), projjson
-        parsed = pyproj.CRS.from_user_input(crs)
-    except pyproj.exceptions.CRSError as error:
-        raise ValueError(f"pyproj cannot read the CRS {crs!r}: {error}") from error
-    return parsed, parsed.to_json_dict()
-
-
 def _prepare(
     bdf: BimDataFrame, crs: CRSLike
 ) -> tuple[_Transformation, pyproj.CRS, pyproj.CRS, dict[str, Any]]:
@@ -523,9 +498,9 @@ def _prepare(
     Returns:
         The transformation, the model CRS, the target CRS and the target's PROJJSON.
     """
-    target, projjson = _resolve(crs)
+    target, projjson = resolve_crs(crs)
     _check_3d(target)
-    source = pyproj.CRS.from_json_dict(bdf.crs)
+    source = bdf.crs
     return _transformer(source, target), source, target, projjson
 
 

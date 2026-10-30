@@ -18,7 +18,8 @@ import polars as pl
 import pytest
 import shapely
 
-from bimpolars import BimDataFrame, LinearUnit, linear_unit, read_ifc
+from bimpolars import BimDataFrame, LinearUnit, read_ifc
+from bimpolars.crs import as_linear_unit
 from bimpolars.ifc import _items, _profile_outline
 from tests.synthetic import run_without
 
@@ -119,8 +120,8 @@ def test_nameless_style_gets_a_fallback_name(
 
 
 def test_unit_and_properties(synthetic: BimDataFrame) -> None:
-    assert linear_unit(synthetic.crs) == LinearUnit("metre", 1.0)
-    assert synthetic.crs["name"] == "Synthetic model coordinates"
+    assert as_linear_unit(synthetic.projjson) == LinearUnit("metre", 1.0)
+    assert synthetic.projjson["name"] == "Synthetic model coordinates"
     wall = synthetic.frame.filter(pl.col("name") == "Wall").row(0, named=True)
     assert wall["properties"]["Pset_WallCommon"] == {"LoadBearing": True, "FireRating": "REI60"}
 

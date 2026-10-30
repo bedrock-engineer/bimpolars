@@ -11,7 +11,8 @@ import numpy as np
 import polars as pl
 import pytest
 
-from bimpolars import MESH_DTYPE, BimDataFrame, linear_unit, read_speckle, version_objects
+from bimpolars import MESH_DTYPE, BimDataFrame, read_speckle, version_objects
+from bimpolars.crs import as_linear_unit
 from bimpolars.frame import MODEL_COLUMNS
 from bimpolars.mesh import UNSTYLED_RGBA
 from bimpolars.speckle import LEVEL_CLASS, OBJECT_SET, _material_style, _triangles
@@ -325,10 +326,10 @@ def test_columns_and_crs(bare: BimDataFrame) -> None:
     assert bare.frame.columns == list(MODEL_COLUMNS)
     assert bare.frame.schema["mesh"] == MESH_DTYPE
     assert bare.frame.schema["class"] == pl.Categorical
-    assert bare.crs["type"] == "EngineeringCRS"
-    assert bare.crs["name"] == "Synthetic model coordinates"
-    assert bare.crs["datum"]["name"] == "Speckle model origin"
-    assert linear_unit(bare.crs).name == "millimetre"
+    assert bare.projjson["type"] == "EngineeringCRS"
+    assert bare.projjson["name"] == "Synthetic model coordinates"
+    assert bare.projjson["datum"]["name"] == "Speckle model origin"
+    assert as_linear_unit(bare.projjson).name == "millimetre"
 
 
 def test_one_row_per_element_and_placements_fold(bare: BimDataFrame) -> None:
@@ -463,9 +464,11 @@ def test_bundle_fills_class_name_properties_and_levels(bundled: BimDataFrame) ->
     assert column["properties.Parameters.Dimensions"] == {"Length": 3000.0, "Width": None}
     assert column["properties"]["elementId"] == 99.0
     assert row(bundled, "w1")["properties"]["properties"]["elementId"] == 42.0
-    assert bundled.crs["name"] == "synthetic model coordinates"
-    assert bundled.crs["datum"]["name"] == "Revit survey point"
-    assert linear_unit(bundled.crs).name == "millimetre"  # the root's units win over the bundle's
+    assert bundled.projjson["name"] == "synthetic model coordinates"
+    assert bundled.projjson["datum"]["name"] == "Revit survey point"
+    assert (
+        as_linear_unit(bundled.projjson).name == "millimetre"
+    )  # the root's units win over the bundle's
 
 
 def test_bundle_materials_for_definition_geometry(bundled: BimDataFrame) -> None:
@@ -610,20 +613,20 @@ def test_unit_fallbacks() -> None:
     objects = model_objects()
     del objects[0]["units"]
     # without units on the root: the meshes' most common unit, or the bundle's
-    assert linear_unit(read_speckle(objects).crs).name == "millimetre"
+    assert as_linear_unit(read_speckle(objects).projjson).name == "millimetre"
     in_metres = read_speckle(objects, bundle_tables())
-    assert linear_unit(in_metres.crs).name == "metre"
+    assert as_linear_unit(in_metres.projjson).name == "metre"
     assert row(in_metres, "w1")["bbox"]["xmax"] == 2.0
     for obj in objects:
         obj.pop("units", None)
-    assert linear_unit(read_speckle(objects).crs).name == "metre"
+    assert as_linear_unit(read_speckle(objects).projjson).name == "metre"
 
 
 def test_name_overrides() -> None:
-    assert read_speckle(model_objects(), name="Mine").crs["name"] == "Mine model coordinates"
+    assert read_speckle(model_objects(), name="Mine").projjson["name"] == "Mine model coordinates"
     objects = model_objects()
     objects[0]["name"] = "Received model"
-    assert read_speckle(objects).crs["name"] == "Speckle model coordinates"
+    assert read_speckle(objects).projjson["name"] == "Speckle model coordinates"
 
 
 def test_triangles() -> None:

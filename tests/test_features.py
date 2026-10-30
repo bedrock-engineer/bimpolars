@@ -48,7 +48,7 @@ def test_box_footprint_lies_at_its_storey() -> None:
     assert footprint.area == 500 * 800
     assert footprint.bounds == (10, 20, 510, 820)
     assert z_values(footprint) == {3000.0}
-    assert bdf.crs == engineering_crs("Synthetic", unit="millimetre")
+    assert bdf.projjson == engineering_crs("Synthetic", unit="millimetre")
 
 
 def test_element_without_a_level_lies_at_its_lowest_z() -> None:

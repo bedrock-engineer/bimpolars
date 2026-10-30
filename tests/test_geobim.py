@@ -6,29 +6,27 @@ from __future__ import annotations
 import json
 import math
 import warnings
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 import ifcopenshell
 import ifcopenshell.util.placement
 import numpy as np
 import polars as pl
+import pyproj
 import pytest
 import shapely
 
-pyproj = pytest.importorskip("pyproj")
-
-from bimpolars import (  # noqa: E402
+from bimpolars import (
     BBOX_DTYPE,
     MESH_DTYPE,
     NATIVE_GEOM_DTYPE,
     BimDataFrame,
-    linear_unit,
     read_parquet,
     simple_features,
 )
-from bimpolars.crs import CRS84H  # noqa: E402
-from bimpolars.frame import MODEL_COLUMNS  # noqa: E402
-from bimpolars.geobim import (  # noqa: E402
+from bimpolars.crs import CRS84H
+from bimpolars.frame import MODEL_COLUMNS
+from bimpolars.geobim import (
     AFFINE_TOLERANCE,
     WKB_COLUMNS,
     affine_transformation,
@@ -38,9 +36,9 @@ from bimpolars.geobim import (  # noqa: E402
     to_crs,
     with_geog,
 )
-from bimpolars.geoparquet import GEO_METADATA_KEY, geo_metadata  # noqa: E402
-from bimpolars.lightbim import QA_DTYPE  # noqa: E402
-from tests.synthetic import SPATIAL, box, model, run_without, sweep, translation  # noqa: E402
+from bimpolars.geoparquet import GEO_METADATA_KEY, geo_metadata
+from bimpolars.lightbim import QA_DTYPE
+from tests.synthetic import SPATIAL, box, model, sweep, translation
 
 
 class Site(NamedTuple):
@@ -65,7 +63,7 @@ class Site(NamedTuple):
             ]
         )
 
-    def crs(self) -> dict[str, Any]:
+    def crs(self) -> pyproj.CRS:
         unit = {0.001: "millimetre", 1.0: "metre"}[self.unit]
         return derived_engineering_crs(
             "EPSG:7415",
@@ -175,7 +173,12 @@ def column_model(footprint: shapely.Polygon | None = None) -> BimDataFrame:
 
 
 def test_derived_engineering_crs_is_a_compound_of_two_derived_crss() -> None:
-    crs = SIXTY5.crs()
+    parsed = SIXTY5.crs()
+    assert parsed.type_name == "Compound CRS"
+    assert [axis.unit_name for axis in parsed.axis_info] == ["millimetre"] * 3
+    assert [axis.unit_conversion_factor for axis in parsed.axis_info] == [0.001] * 3
+
+    crs = parsed.to_json_dict()
     assert crs["type"] == "CompoundCRS"
     assert crs["name"] == "Sixty5 Engineering CRS"
     grid, height = crs["components"]
@@ -194,13 +197,18 @@ def test_derived_engineering_crs_is_a_compound_of_two_derived_crss() -> None:
     assert height["base_crs"]["id"] == {"authority": "EPSG", "code": 5709}
     assert height["conversion"]["method"]["id"] == {"authority": "EPSG", "code": 9616}
     assert height["conversion"]["parameters"][0]["value"] == -18.625
-    assert linear_unit(crs).name == "millimetre"
     json.dumps(crs)
 
-    parsed = pyproj.CRS.from_json_dict(crs)
-    assert parsed.type_name == "Compound CRS"
-    assert [axis.unit_name for axis in parsed.axis_info] == ["millimetre"] * 3
-    assert [axis.unit_conversion_factor for axis in parsed.axis_info] == [0.001] * 3
+
+def test_derived_engineering_crs_takes_the_unit_of_the_model() -> None:
+    """``unit=bdf`` gives the site the model's own unit, as a name or another CRS would."""
+    sixty5 = SIXTY5._replace(name="Site")
+    in_millimetres = sixty5.crs()
+    args = ("EPSG:7415", sixty5.easting, sixty5.northing, sixty5.orthometric_height)
+    for unit in (plain_column_model(), in_millimetres, in_millimetres.to_json_dict()):
+        assert derived_engineering_crs(*args, sixty5.rotation, unit=unit) == in_millimetres
+    in_metres = derived_engineering_crs(*args, sixty5.rotation, unit="EPSG:7415")
+    assert in_metres.axis_info[0].unit_name == "metre"
 
 
 @pytest.mark.parametrize("site", SITES)
@@ -233,11 +241,11 @@ def test_set_crs_labels_without_moving() -> None:
     labelled = set_crs(bdf, SIXTY5.crs())
     assert labelled.frame is bdf.frame
     assert labelled.crs == SIXTY5.crs()
-    assert bdf.crs["type"] == "EngineeringCRS"
+    assert bdf.projjson["type"] == "EngineeringCRS"
 
     from_epsg = set_crs(bdf, "EPSG:7415")
-    assert from_epsg.crs["id"] == {"authority": "EPSG", "code": 7415}
-    assert set_crs(bdf, pyproj.CRS("EPSG:7415")).crs == from_epsg.crs
+    assert from_epsg.projjson["id"] == {"authority": "EPSG", "code": 7415}
+    assert set_crs(bdf, pyproj.CRS("EPSG:7415")).crs == from_epsg.projjson
     with pytest.raises(ValueError, match="three"):
         set_crs(bdf, "EPSG:28992")
     with pytest.raises(ValueError, match="cannot read"):
@@ -257,7 +265,7 @@ def test_to_crs_moves_the_geometry_columns_together() -> None:
     assert frame["bbox"].null_count() == 3
     assert frame["footprint"].null_count() == 3
     assert frame["id"].to_list() == bdf.frame["id"].to_list()
-    assert moved.crs["id"] == {"authority": "EPSG", "code": 7415}
+    assert moved.projjson["id"] == {"authority": "EPSG", "code": 7415}
 
     expected = SIXTY5.to_rd(vertices(bdf))
     assert np.abs(vertices(moved) - expected).max() < 1e-6
@@ -375,7 +383,7 @@ def test_footprints_moved_to_a_geographic_crs_keep_z(
     bboxes = [bbox for bbox, present in zip(frame["bbox"], has, strict=True) if present]
     for footprint, bbox in zip(moved[has], bboxes, strict=True):
         assert inside_bbox(footprint, bbox)
-    geo = geo_metadata(frame, geographic.crs)
+    geo = geo_metadata(frame, geographic.projjson)
     assert geo is not None
     assert sorted(geo["columns"]["footprint"]["geometry_types"]) == ["MultiPolygon Z", "Polygon Z"]
 
@@ -404,7 +412,7 @@ def test_to_crs_of_sixty5_puts_the_model_where_the_notebook_does(
     sixty5_rd: BimDataFrame,
 ) -> None:
     frame = sixty5_rd.frame
-    assert pyproj.CRS.from_json_dict(sixty5_rd.crs) == pyproj.CRS("EPSG:7415")
+    assert sixty5_rd.crs == pyproj.CRS("EPSG:7415")
     assert frame.schema == sixty5_structural_features.frame.schema
     assert frame["mesh"].null_count() == 40
     assert frame["footprint"].null_count() == 40
@@ -508,7 +516,7 @@ def test_a_non_affine_target_drops_native_geom() -> None:
     assert qa[3]["source"] == "extrusion"
     lon, lat, _ = vertices(geographic).T
     assert (abs(lon - 5.46) < 0.01).all() and (abs(lat - 51.45) < 0.01).all()
-    assert geographic.crs["type"] == "GeographicCRS"
+    assert geographic.projjson["type"] == "GeographicCRS"
     assert affine_transformation(bdf, "OGC:CRS84h") is None
     assert affine_transformation(bdf, "EPSG:4978") is None
 
@@ -632,22 +640,6 @@ def test_a_site_in_millimetres_and_one_in_metres_land_on_the_same_spot() -> None
     )
 
 
-def test_the_core_imports_without_pyproj() -> None:
-    lines = run_without(
-        "pyproj",
-        "import bimpolars\n"
-        "import bimpolars.data, bimpolars.features, bimpolars.geoparquet, bimpolars.gltf\n"
-        "import bimpolars.ifc, bimpolars.speckle\n"
-        "print(bimpolars.engineering_crs('ok')['name'])\n"
-        "try:\n"
-        "    import bimpolars.geobim\n"
-        "except ImportError as error:\n"
-        "    print(error)\n",
-    )
-    assert lines[0] == "ok"
-    assert "bimpolars[geobim]" in lines[1]
-
-
 @pytest.fixture(scope="module")
 def sixty5_geog(sixty5_structural_features: BimDataFrame) -> BimDataFrame:
     """The Sixty5 structural model georeferenced, with its footprints in OGC:CRS84h."""
@@ -713,7 +705,7 @@ def test_geog_is_the_primary_geoparquet_column_of_sixty5(
     sixty5_geog: BimDataFrame, tmp_path
 ) -> None:
     frame = sixty5_geog.frame
-    geo = geo_metadata(frame, sixty5_geog.crs)
+    geo = geo_metadata(frame, sixty5_geog.projjson)
     assert geo is not None
     assert geo["primary_column"] == "geog"
     assert list(geo["columns"]) == ["geog", "footprint"]
@@ -729,7 +721,7 @@ def test_geog_is_the_primary_geoparquet_column_of_sixty5(
     assert [lon0, lat0] == pytest.approx(np.nanmin(bounds[:, :2], axis=0).tolist())
     assert [lon1, lat1] == pytest.approx(np.nanmax(bounds[:, 2:], axis=0).tolist())
     footprint = geo["columns"]["footprint"]
-    assert footprint["crs"] == SIXTY5.crs()
+    assert pyproj.CRS.from_json_dict(footprint["crs"]) == SIXTY5.crs()
     assert footprint["covering"]["bbox"]["xmin"] == ["bbox", "xmin"]
 
     path = tmp_path / "sixty5_geog.parquet"
@@ -828,7 +820,7 @@ def test_with_geog_on_a_column() -> None:
     assert frame.columns == [*MODEL_COLUMNS, "footprint", "geog"]
     assert frame["geog"].null_count() == 3
     assert frame["footprint"].equals(bdf.frame["footprint"])
-    assert placed.crs == bdf.crs
+    assert placed.projjson == bdf.projjson
     geog = geogs(placed)[3]
     assert geog.geom_type == "Polygon" and geog.has_z
     expected = rd_to_geog(coordinates(COLUMN_FOOTPRINT))
@@ -878,7 +870,7 @@ def test_with_geog_refuses_what_it_cannot_place() -> None:
     )
     with pytest.raises(ValueError, match="set_crs"):
         with_geog(unplaced)
-    assert plain.crs["type"] == "EngineeringCRS"
+    assert plain.projjson["type"] == "EngineeringCRS"
     not_wkb = column_model(COLUMN_FOOTPRINT)
     not_wkb = not_wkb.with_frame(not_wkb.frame.with_columns(footprint=pl.lit("POLYGON EMPTY")))
     with pytest.raises(TypeError, match="Binary"):
@@ -908,7 +900,7 @@ def test_geog_and_lightbim_are_geoparquet_geometries_together(tmp_path) -> None:
     geo = json.loads(pl.read_parquet_metadata(path)[GEO_METADATA_KEY])
     assert geo["primary_column"] == "geog"
     assert list(geo["columns"]) == ["geog", "footprint", "lightbim"]
-    assert geo["columns"]["lightbim"]["crs"] == bdf.crs
+    assert geo["columns"]["lightbim"]["crs"] == bdf.projjson
     assert geo["columns"]["lightbim"]["covering"]["bbox"]["xmin"] == ["bbox", "xmin"]
     assert read_parquet(path).equals(bdf)
     # simple_features drops geog, which belonged to the old footprints, and adds lightbim again
