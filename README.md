@@ -47,6 +47,12 @@ geopandas.read_parquet("sixty5.parquet", columns=["id", "class", "footprint"]).c
 # <Engineering CRS: {"$schema": ...}>  Name: MM16169 model coordinates, millimetre axes
 ```
 
+The demo page, [bedrock-engineer.github.io/bimpolars](https://bedrock-engineer.github.io/bimpolars/),
+shows the Sixty5 structural model read with `read_ifc` and placed on earth with
+`derived_engineering_crs` in [specklewidgets](https://github.com/bedrock-engineer/specklestuff)'
+GeoSpeckleViewer, among PDOK's 3D BAG, beside a map of the clicked element's footprint (its
+`geog`). The page is built from specklestuff's `site/` (`.github/workflows/pages.yml`).
+
 ## Install
 
 ```sh
