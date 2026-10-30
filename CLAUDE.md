@@ -11,7 +11,9 @@ model: `derived_engineering_crs`, `set_crs`, `to_crs`, `affine_transformation` a
 `element_meshes_glb` (one primitive per style) and `triangles_glb` (any triangles).
 `src/bimpolars/speckle.py` reads a Speckle version from its v3 objects: `version_objects`
 (Parquet or SQLite copy) and `read_speckle` (instances expanded, the bundle's categories,
-parameters and levels joined by applicationId). `src/bimpolars/mesh.py` holds the `Mesh` the
+parameters and levels joined by applicationId). `src/bimpolars/bundle.py` (the `[speckle]`
+extra, specklepy) projects a bundle on disk, or in the bucket, to those objects:
+`bundle_model` and `bundle_objects`. `src/bimpolars/mesh.py` holds the `Mesh` the
 readers end with, `Style`, `styled_mesh` (faces sorted by style) and `mesh_frame`, which builds
 the `mesh` and `bbox` columns from it.
 
@@ -23,8 +25,8 @@ the `mesh` and `bbox` columns from it.
   `uv run pytest -m slow`.
 - Typed code with Google-style docstrings (ruff enforces `D` with the google convention).
 - The core imports neither pyproj nor specklepy. pyproj lives in `bimpolars.geobim` behind
-  the extra `[geobim]` (#6); #10 adds the extra `[speckle]` (specklepy) in its own module
-  (`bimpolars.bundle`), while `bimpolars.speckle` (#9) reads v3 objects as plain JSON.
+  the extra `[geobim]` (#6) and specklepy in `bimpolars.bundle` behind `[speckle]` (#10),
+  while `bimpolars.speckle` (#9) reads v3 objects as plain JSON.
   `tests/test_geobim.py::test_the_core_imports_without_pyproj` and
   `tests/test_speckle.py::test_the_core_imports_without_specklepy` import the core in a
   subprocess with `sys.modules[...] = None` to keep it that way. CRSs are PROJJSON dicts
@@ -85,8 +87,21 @@ the `mesh` and `bbox` columns from it.
   follow-up through the envelope's `DISPLAY` order). The envelope's kinds and relations are
   looked up by name in `envelope.node_kinds` and `envelope.rel_types`, with schema 1.5's
   numbers as the fallback. The CRS is the root's `units`, else the bundle's, else the meshes'
-  most common, else metres; never the Revit geolocation. No specklepy: the SGEO geometry of a
-  bundle is not decoded here (#10).
+  most common, else metres; never the Revit geolocation. No specklepy here: a bundle's SGEO
+  geometry is decoded by `bundle_objects`. A bundle is a folder, a mapping of tables, or its
+  URL in the bucket (`data.bucket_key` strips `DATA_URL`, http or https; `bundle_folder`
+  fetches the tables into the data folder; any other URL raises).
+- `bundle_objects` (`bundle.py`) is specklepy's `Model.to_base()` on the `Model` that
+  `bundle_model` builds from the folder (never `Model.close()` or `with`: it deletes the
+  folder), with two fixes on the Base tree before serialization: the own geometry of an
+  element that has placements (`base_projection._geometry_object`, private, hence the exact
+  pin `specklepy[bundle]==2026.9.1`) is inserted before its first placement, which is renamed
+  `<applicationId>-instance-0`; and the material proxies get `def-geo-<k>` targets for the
+  definition geometry the envelope's `HAS_MATERIAL` styles (a geometry in a `DEFINES`
+  relation without a `DISPLAY` owner), the proxies in the envelope's node order. The
+  serialization is specklepy's deprecated JSON pipeline (`BaseObjectSerializer` into a
+  `MemoryTransport`, its DeprecationWarning silenced), root first. On the three RVT bundles
+  the objects and the `read_speckle` frames equal the bucket's (`tests/test_bundle.py`).
 - `plan_outline` retries a union that GEOS's floating-point overlay fails on (one MEP stair
   mesh of 720 faces does: `e1d4bdfb-2688-47c1-a386-3b48116e5fd2-0008cb48`, pinned in
   `test_mep`) with `grid_size` = the sliver fraction times the extent, which is the
@@ -168,7 +183,8 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   geometry; and `5cb009bb77`, `rvt-advanced-sample-arch.ifc` received by Speckle's IFC
   importer, 9730 objects in metres without a bundle) and the bundles
   `rvt-advanced-sample/speckle-bundle/<model id>/<version id>/<name>.<table>.parquet`
-  (`data.RVT_SPECKLE_ARCH/STR/MEP`, 18 tables each, `data.fetch_bundle`). `read_speckle` with
+  (`data.RVT_SPECKLE_ARCH/STR/MEP`, 18 tables each, `data.fetch_bundle`); `bundle_objects`
+  reproduces each version from its bundle, object for object, in 3 to 4 s. `read_speckle` with
   the bundle, all in mm at the project base point: arch 5877 rows = 5761 elements with an
   object (396 with geometry of their own, 5365 instances, all with a category from the
   bundle; 18 elements have several placements, a stair 22) + 111 elements the bundle alone

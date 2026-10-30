@@ -9,7 +9,8 @@ converted to) projected to v3 objects with specklepy. :func:`version_objects` re
 version's objects from a local copy; :func:`read_speckle` turns them into a
 :class:`~bimpolars.BimDataFrame`, expanding the instances, and reads the Revit categories,
 parameters and levels from the version's bundle when one is given. Nothing here needs
-specklepy; :mod:`bimpolars.bundle` (bimpolars#10) will, behind the ``[speckle]`` extra.
+specklepy; :mod:`bimpolars.bundle` (the ``[speckle]`` extra) does, to project a bundle on disk
+to the objects this module reads.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import numpy as np
 import polars as pl
 
 from bimpolars.crs import LinearUnit, engineering_crs
+from bimpolars.data import bucket_key, fetch_bundle
 from bimpolars.frame import BimDataFrame
 from bimpolars.mesh import UNSTYLED, Mesh, Style, mesh_frame, styled_mesh
 from bimpolars.properties import properties_series
@@ -34,8 +36,9 @@ type SpeckleObject = dict[str, Any]
 """One v3 object as parsed JSON."""
 
 type Bundle = str | os.PathLike[str] | Mapping[str, pl.DataFrame]
-"""A Speckle bundle: the folder holding its ``<name>.<table>.parquet`` files, or the tables
-themselves by name (``"eav.eav"``, ``"envelope.nodes"``, ...)."""
+"""A Speckle bundle: the folder holding its ``<name>.<table>.parquet`` files, the URL of its
+key prefix in the bimpolars bucket (:func:`bundle_folder`), or the tables themselves by name
+(``"eav.eav"``, ``"envelope.nodes"``, ...)."""
 
 SPECKLE_UNITS: dict[str, LinearUnit] = {
     "mm": LinearUnit("millimetre", 0.001),
@@ -228,9 +231,10 @@ def read_speckle(
       element's, or the instance's, with its ``diffuse`` ARGB and ``opacity``. The first proxy
       that does wins when several do, which paints a layered wall, floor or ceiling (one proxy
       per layer, all targeting the element) in its first layer's material. A definition's mesh
-      without one (specklepy's projection gives none) gets, with a bundle, the material the
-      envelope attaches to the bundle geometry it came from (``def-geo-<geometry index>``). A
-      mesh without either is unstyled. A ``displayValue`` reference to an object the version
+      without one (specklepy's plain projection gives none, unlike
+      :func:`bimpolars.bundle.bundle_objects`) gets, with a bundle, the material the envelope
+      attaches to the bundle geometry it came from (``def-geo-<geometry index>``). A mesh
+      without either is unstyled. A ``displayValue`` reference to an object the version
       does not include is skipped, so a row whose geometry is only such references, or only
       an instance of an empty definition, has no mesh.
 
@@ -239,9 +243,11 @@ def read_speckle(
     geolocation is never used.
 
     Args:
-        objects: The version's objects, root first, as :func:`version_objects` gives them.
+        objects: The version's objects, root first, as :func:`version_objects` or
+            :func:`bimpolars.bundle.bundle_objects` gives them.
         bundle: The version's Speckle bundle: a folder of ``<name>.<table>.parquet`` files,
-            or the tables by name. Optional; without it the rows get what the objects carry.
+            the URL of its key prefix in the bimpolars bucket (:func:`bundle_folder`), or
+            the tables by name. Optional; without it the rows get what the objects carry.
         name: The model's name, for the CRS; the bundle's file name or the root's by default.
 
     Returns:
@@ -251,8 +257,8 @@ def read_speckle(
         ValueError: If the objects have no root, name a unit this module does not know, nest
             instance definitions in a cycle, lack a DataChunk an object refers to, or hold a
             face list or an instance transform of the wrong length; or if the bundle folder is
-            missing, lacks ``eav.objects``, ``eav.paths`` or ``eav.eav``, or holds two tables
-            of one name.
+            missing, its URL is outside the bucket, it lacks ``eav.objects``, ``eav.paths`` or
+            ``eav.eav``, or holds two tables of one name.
     """
     if not objects:
         raise ValueError("no objects: the root object must come first")
@@ -504,6 +510,29 @@ class _Reader:
         return parts
 
 
+def bundle_folder(bundle: str | os.PathLike[str]) -> Path:
+    """Gives the local folder of a Speckle bundle named by its folder or by its bucket URL.
+
+    Args:
+        bundle: The folder holding the bundle's ``<name>.<table>.parquet`` files, or the URL
+            of the bundle's key prefix in the bimpolars bucket, ``<DATA_URL><prefix>`` (the
+            prefix as :func:`bimpolars.data.fetch_bundle` takes it): the tables are then
+            fetched into the data folder, downloaded if they are not there yet.
+
+    Returns:
+        The folder.
+
+    Raises:
+        ValueError: If the folder does not exist, or the URL is not in the bucket.
+    """
+    if isinstance(bundle, str) and bucket_key(bundle) != bundle:
+        return fetch_bundle(bundle)
+    folder = Path(bundle)
+    if not folder.is_dir():
+        raise ValueError(f"the bundle folder {folder} does not exist")
+    return folder
+
+
 class _BundleTables:
     """Reads the tables of a bundle from its folder or from a mapping, by table name."""
 
@@ -513,9 +542,7 @@ class _BundleTables:
         if isinstance(bundle, Mapping):
             self._tables = bundle
         else:
-            self._folder = Path(bundle)
-            if not self._folder.is_dir():
-                raise ValueError(f"the bundle folder {self._folder} does not exist")
+            self._folder = bundle_folder(bundle)
 
     def get(self, table: str) -> pl.DataFrame | None:
         """One table, or None when the bundle does not have it."""
@@ -929,6 +956,7 @@ __all__ = [
     "SPECKLE_UNITS",
     "Bundle",
     "SpeckleObject",
+    "bundle_folder",
     "read_speckle",
     "version_objects",
 ]

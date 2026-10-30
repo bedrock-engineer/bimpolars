@@ -9,6 +9,7 @@ with the same keys) to work without network access.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import urllib.parse
 import urllib.request
@@ -20,6 +21,9 @@ DATA_URL = "http://r2.eu.bedrock.engineer/bimpolars/"
 
 DATA_DIR_ENV = "BIMPOLARS_DATA_DIR"
 """The environment variable naming the local data folder."""
+
+_URL = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
+"""A URL, as opposed to a bucket key or a path (a Windows drive is one letter and a colon)."""
 
 SIXTY5_STRUCTURAL = "sixty5_O-S1-CON-structural-engineering.ifc"
 """Sixty5 (Strijp-S, Eindhoven) structural model: IFC2X3 in millimetres, 2647 elements."""
@@ -112,21 +116,45 @@ def data_dir() -> Path:
     return Path(cache_home) / "bimpolars"
 
 
+def bucket_key(key_or_url: str) -> str:
+    """Gives the bucket key of a data file, from the key itself or from its URL in the bucket.
+
+    Args:
+        key_or_url: A key such as :data:`SIXTY5_STRUCTURAL`, or its URL: :data:`DATA_URL`
+            (``http`` or ``https``) followed by the key, percent-encoded or not.
+
+    Returns:
+        The key.
+
+    Raises:
+        ValueError: If a URL is not in the bucket; fetch such a file yourself.
+    """
+    if not _URL.match(key_or_url):
+        return key_or_url
+    for base in (DATA_URL, DATA_URL.replace("http://", "https://", 1)):
+        if key_or_url.startswith(base):
+            return urllib.parse.unquote(key_or_url[len(base) :])
+    raise ValueError(f"{key_or_url!r} is not in the bucket {DATA_URL}: fetch it yourself")
+
+
 def fetch(key: str, *, download: bool = True) -> Path:
     """Gives the local path of a data file, downloading it on first use.
 
     Args:
         key: The file's key in the bucket, such as :data:`SIXTY5_STRUCTURAL` or
-            ``"rvt-advanced-sample/speckle-v3-objects.parquet"``.
+            ``"rvt-advanced-sample/speckle-v3-objects.parquet"``, or its URL in the bucket
+            (:func:`bucket_key`).
         download: Whether to download a file that is not in :func:`data_dir`.
 
     Returns:
         The path of the file in :func:`data_dir`.
 
     Raises:
+        ValueError: If ``key`` is a URL outside the bucket.
         FileNotFoundError: If the file is missing locally and ``download`` is False.
         urllib.error.URLError: If the download fails.
     """
+    key = bucket_key(key)
     path = data_dir() / key
     if path.is_file():
         return path
@@ -151,15 +179,17 @@ def fetch_bundle(prefix: str, *, download: bool = True) -> Path:
     """Gives the local folder of a Speckle bundle, downloading its tables on first use.
 
     Args:
-        prefix: The key prefix of the bundle's tables, such as ``RVT_SPECKLE_ARCH.bundle``:
-            every table of :data:`BUNDLE_TABLES` is fetched as
-            ``<prefix>.<table>.parquet``.
+        prefix: The key prefix of the bundle's tables, such as ``RVT_SPECKLE_ARCH.bundle``,
+            or its URL in the bucket (:func:`bucket_key`): every table of
+            :data:`BUNDLE_TABLES` is fetched as ``<prefix>.<table>.parquet``.
         download: Whether to download the tables that are not in :func:`data_dir`.
 
     Returns:
-        The folder holding the tables, for :func:`bimpolars.read_speckle`.
+        The folder holding the tables, for :func:`bimpolars.read_speckle` and
+        :func:`bimpolars.bundle.bundle_objects`.
 
     Raises:
+        ValueError: If ``prefix`` is a URL outside the bucket.
         FileNotFoundError: If a table is missing locally and ``download`` is False.
         urllib.error.URLError: If a download fails.
     """
