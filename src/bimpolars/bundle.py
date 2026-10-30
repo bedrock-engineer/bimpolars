@@ -17,17 +17,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import warnings
-from collections.abc import Iterator
 from typing import Any
 
 try:
     from specklepy.bundle.bundle_reader import read_bundle
     from specklepy.bundle.model import Model
-    from specklepy.bundle.spec import NodeKind
     from specklepy.objects.base import Base
     from specklepy.objects.models.collections.collection import Collection
-    from specklepy.objects.other import RenderMaterial
     from specklepy.objects.proxies import RenderMaterialProxy
     from specklepy.serialization.base_object_serializer import BaseObjectSerializer
     from specklepy.transports.memory import MemoryTransport
@@ -37,9 +35,9 @@ except ImportError as error:
     ) from error
 
 try:
-    # the DataObject specklepy's projection builds for an element's own geometry; private,
-    # which is why the extra pins specklepy
-    from specklepy.bundle.base_projection import _geometry_object
+    # specklepy's projection of an element's own geometry to a DataObject, and of the
+    # material nodes to RenderMaterialProxies; private, which is why the extra pins specklepy
+    from specklepy.bundle.base_projection import _geometry_object, _materials
 except ImportError as error:
     raise ImportError(
         "bimpolars.bundle needs specklepy 2026.9.1, whose bundle projection it extends: "
@@ -59,6 +57,26 @@ FIRST_PLACEMENT_SUFFIX = "-instance-0"
 """What :func:`bundle_objects` appends to the applicationId of an element's first placement
 when the element keeps geometry of its own under the plain applicationId."""
 
+_JSON_PIPELINE_DEPRECATION = r".*JSON based send/receive pipelines are deprecated"
+"""The text of the DeprecationWarning of specklepy's JSON pipeline (``MemoryTransport``,
+``BaseObjectSerializer``), which :func:`bundle_objects` uses on purpose."""
+
+_PLACEMENT = re.compile(r"^(?P<base>.+)-instance-\d+$")
+"""A placement after the first: the element's applicationId plus ``-instance-N``."""
+
+
+class _FolderModel(Model):  # type: ignore[misc]
+    """A ``Model`` over a folder it does not own: closing it keeps the folder.
+
+    specklepy's ``Model`` owns the temporary folder ``receive`` downloads into, and
+    ``close()`` (also at the end of ``with model:``) deletes it. A bundle opened from the
+    user's folder must survive that.
+    """
+
+    def close(self) -> None:
+        """Marks the model closed and leaves its folder alone."""
+        self._closed = True
+
 
 def bundle_model(bundle: str | os.PathLike[str]) -> Model:
     """Opens a Speckle bundle as a specklepy ``Model``, from its folder, without a server.
@@ -74,18 +92,27 @@ def bundle_model(bundle: str | os.PathLike[str]) -> Model:
             as :func:`bimpolars.data.fetch_bundle` takes it), fetched into the data folder.
 
     Returns:
-        The model. Do not close it: ``Model.close()`` and the ``with`` statement delete the
-        model's folder, which specklepy owns only when it downloaded it.
+        The model, without project, model or version id. Closing it, or leaving a ``with``
+        block, keeps the folder, unlike a model specklepy's ``receive`` downloaded; its
+        geometry stays readable from the folder afterwards.
 
     Raises:
         ValueError: If the folder does not exist, or the URL is not in the bucket.
         FileNotFoundError: If the folder lacks a table the bundle reader requires
             (``eav.objects``, ``eav.paths``, ``eav.eav``, ``envelope.nodes`` or
             ``envelope.relations``).
+        urllib.error.URLError: If downloading a table of a bundle named by its URL fails.
     """
     folder = bundle_folder(bundle)
     files = sorted(str(path) for path in folder.iterdir() if path.is_file())
-    return Model("", "", "", str(folder), files, read_bundle(str(folder)))
+    return _FolderModel(
+        project_id="",
+        model_id="",
+        version_id="",
+        directory=str(folder),
+        files=files,
+        bundle=read_bundle(str(folder)),
+    )
 
 
 def bundle_objects(bundle: str | os.PathLike[str]) -> list[SpeckleObject]:
@@ -126,6 +153,7 @@ def bundle_objects(bundle: str | os.PathLike[str]) -> list[SpeckleObject]:
         ValueError: If the folder does not exist, or the URL is not in the bucket.
         FileNotFoundError: If the folder lacks a table the bundle reader requires, or the
             geometry shards.
+        urllib.error.URLError: If downloading a table of a bundle named by its URL fails.
     """
     model = bundle_model(bundle)
     root = model.to_base()
@@ -133,7 +161,7 @@ def bundle_objects(bundle: str | os.PathLike[str]) -> list[SpeckleObject]:
     _add_definition_materials(model, root)
     with warnings.catch_warnings():
         # the JSON pipeline is deprecated since specklepy 2026.9; it is the one we want
-        warnings.simplefilter("ignore", DeprecationWarning)
+        warnings.filterwarnings("ignore", _JSON_PIPELINE_DEPRECATION, DeprecationWarning)
         memory = MemoryTransport()
         root_id, _ = BaseObjectSerializer(write_transports=[memory]).traverse_base(root)
     objects: dict[str, str] = memory.objects
@@ -144,10 +172,18 @@ def bundle_objects(bundle: str | os.PathLike[str]) -> list[SpeckleObject]:
 
 
 def _keep_element_geometry(model: Model, root: Collection) -> None:
-    """Puts the own geometry of the placed elements back, before their first placement."""
+    """Puts the own geometry of the placed elements back, before their first placement.
+
+    specklepy names an element's first placement after the element and the others
+    ``<applicationId>-instance-N``. The first is renamed ``-instance-0`` so that the
+    element's own geometry can take the plain applicationId. When the first placement is
+    missing (its instance node is not in the envelope), the geometry goes before the first
+    placement there is, which already leaves the plain applicationId free; an element with
+    no placement in the tree at all gets its geometry at the root.
+    """
     bundle = model.bundle
     elements: dict[str, Base] = {}
-    for object_k in {edge.src for edge in bundle.relations.display_instance_edges}:
+    for object_k in sorted({edge.src for edge in bundle.relations.display_instance_edges}):
         app_id = bundle.object_app_ids.get(object_k)
         if app_id is None:
             continue
@@ -156,23 +192,24 @@ def _keep_element_geometry(model: Model, root: Collection) -> None:
             elements[app_id] = element
     if not elements:
         return
-    for collection in _collections(root):
+
+    def insert(collection: Collection) -> None:
         children: list[Any] = []
         for child in collection.elements:
+            if isinstance(child, Collection):
+                insert(child)
             app_id = getattr(child, "applicationId", None)
-            if isinstance(app_id, str) and app_id in elements:
-                children.append(elements.pop(app_id))
-                child.applicationId = child.id = f"{app_id}{FIRST_PLACEMENT_SUFFIX}"
+            if isinstance(app_id, str):
+                if app_id in elements:
+                    children.append(elements.pop(app_id))
+                    child.applicationId = child.id = f"{app_id}{FIRST_PLACEMENT_SUFFIX}"
+                elif (match := _PLACEMENT.match(app_id)) and match.group("base") in elements:
+                    children.append(elements.pop(match.group("base")))
             children.append(child)
         collection.elements = children
 
-
-def _collections(collection: Collection) -> Iterator[Collection]:
-    """A collection and the collections nested in it, depth first."""
-    yield collection
-    for child in collection.elements:
-        if isinstance(child, Collection):
-            yield from _collections(child)
+    insert(root)
+    root.elements.extend(elements.values())
 
 
 def _add_definition_materials(model: Model, root: Collection) -> None:
@@ -197,36 +234,16 @@ def _add_definition_materials(model: Model, root: Collection) -> None:
         for proxy in getattr(root, "renderMaterialProxies", None) or []
     }
     proxies: list[RenderMaterialProxy] = []
-    for node_k, node in bundle.nodes.items():
-        if node.kind != NodeKind.MATERIAL:
-            continue
-        proxy = existing.get(f"{MATERIAL_PREFIX}{node_k}")
-        if proxy is None:
-            proxy = _material_proxy(node_k, node)
+    # every material node as specklepy's projection builds it, in the envelope's order; the
+    # ones the projection already attached to an element's geometry come from the root
+    for node_k, fresh in _materials(bundle.nodes).items():
+        proxy = existing.get(str(fresh.applicationId), fresh)
         for target in targets.get(node_k, []):
             if target not in proxy.objects:
                 proxy.objects.append(target)
         if proxy.objects:
             proxies.append(proxy)
     root["renderMaterialProxies"] = proxies
-
-
-def _material_proxy(node_k: int, node: Any) -> RenderMaterialProxy:
-    """A material node as the RenderMaterialProxy specklepy's projection builds for it."""
-    material = RenderMaterial(
-        name=node.name or "material",
-        diffuse=node.argb if node.argb is not None else -1,
-        opacity=node.opacity if node.opacity is not None else 1.0,
-        metalness=node.metalness if node.metalness is not None else 0.0,
-        roughness=node.roughness if node.roughness is not None else 1.0,
-        emissive=node.emissive if node.emissive is not None else 0,
-    )
-    material.applicationId = f"{MATERIAL_PREFIX}{node_k}"
-    if node.ior is not None:
-        material["ior"] = node.ior
-    proxy = RenderMaterialProxy(value=material, objects=[])
-    proxy.applicationId = proxy.id = f"{MATERIAL_PREFIX}{node_k}"
-    return proxy
 
 
 __all__ = [

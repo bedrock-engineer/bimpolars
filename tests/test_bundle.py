@@ -6,6 +6,9 @@ the same objects, and ``read_speckle`` the same frame, with the bundle named by 
 
 from __future__ import annotations
 
+import dataclasses
+import shutil
+import warnings
 from collections import Counter
 from pathlib import Path
 
@@ -21,6 +24,7 @@ from bimpolars import data, read_speckle, version_objects
 from bimpolars.bundle import (
     DEFINITION_GEOMETRY_PREFIX,
     FIRST_PLACEMENT_SUFFIX,
+    _keep_element_geometry,
     bundle_model,
     bundle_objects,
 )
@@ -68,6 +72,12 @@ def bucket_objects(version: data.SpeckleVersion) -> list[dict]:
     return version_objects(data.fetch(data.RVT_SPECKLE_V3_OBJECTS), version.version_id)
 
 
+@pytest.fixture(scope="module")
+def plain(version: data.SpeckleVersion) -> Collection:
+    """specklepy's own projection of the bundle, without the two fixes."""
+    return bundle_model(data.fetch_bundle(version.bundle)).to_base()
+
+
 def element_objects(objects: list[dict]) -> set[str]:
     """The applicationIds of the DataObjects that are elements, not definition geometry."""
     return {
@@ -76,6 +86,17 @@ def element_objects(objects: list[dict]) -> set[str]:
         if obj.get("speckle_type") == DATA_OBJECT_TYPE
         and not obj["applicationId"].startswith(DEFINITION_GEOMETRY_PREFIX)
     }
+
+
+def placements(root: Collection) -> list[str]:
+    """The applicationIds of the InstanceProxy objects under a Base tree, depth first."""
+    found: list[str] = []
+    for child in root.elements:
+        if isinstance(child, Collection):
+            found += placements(child)
+        elif child.speckle_type == INSTANCE_TYPE:
+            found.append(child.applicationId)
+    return found
 
 
 def plain_element_objects(root: Collection) -> set[str]:
@@ -100,21 +121,32 @@ def test_bundle_objects_match_the_bucket(
     assert root["units"] == "mm"
     assert root["version"] == 4
     assert set(root["__closure"]) == {obj["id"] for obj in objects[1:]}
+    # every object but the root is the bucket's, byte for byte: the id is the content hash
+    assert {obj["id"] for obj in objects[1:]} == {obj["id"] for obj in bucket_objects[1:]}
     assert Counter(obj.get("speckle_type") for obj in objects) == Counter(
         obj.get("speckle_type") for obj in bucket_objects
     )
-    assert {obj.get("applicationId") for obj in objects} == {
-        obj.get("applicationId") for obj in bucket_objects
-    }
-    assert len(root["instanceDefinitionProxies"]) == len(
-        bucket_objects[0]["instanceDefinitionProxies"]
-    )
-    # the same materials in the same order, each targeting the same objects
-    mine, theirs = material_targets(root), material_targets(bucket_objects[0])
+    theirs_root = bucket_objects[0]
+    assert root["instanceDefinitionProxies"] == theirs_root["instanceDefinitionProxies"]
+    # the root differs in its material proxies only: the reference notebook wrote them as
+    # its own JSON, with other ids and no totalChildrenCount, in the same order and with
+    # the same targets and material values
+    mine, theirs = material_targets(root), material_targets(theirs_root)
     assert list(mine) == list(theirs)
     assert {name: sorted(targets) for name, targets in mine.items()} == {
         name: sorted(targets) for name, targets in theirs.items()
     }
+
+    def value(proxy: dict) -> dict:
+        return {
+            key: item
+            for key, item in proxy["value"].items()
+            if key not in {"id", "totalChildrenCount"}
+        }
+
+    assert [value(proxy) for proxy in root["renderMaterialProxies"]] == [
+        value(proxy) for proxy in theirs_root["renderMaterialProxies"]
+    ]
 
 
 def test_read_speckle_from_the_bucket_url(
@@ -131,7 +163,7 @@ def test_read_speckle_from_the_bucket_url(
 
 
 def test_placed_elements_keep_their_geometry(
-    objects: list[dict], version: data.SpeckleVersion, which: str
+    objects: list[dict], plain: Collection, which: str
 ) -> None:
     both = own_geometry_and_placements(objects)
     assert len(both) == N_OWN_GEOMETRY_AND_PLACED[which]
@@ -150,14 +182,13 @@ def test_placed_elements_keep_their_geometry(
     }
     assert renamed == {f"{base}{FIRST_PLACEMENT_SUFFIX}" for base in both}
     # specklepy's own projection has no DataObject for them
-    plain = bundle_model(data.fetch_bundle(version.bundle)).to_base()
     without = plain_element_objects(plain)
     assert element_objects(objects) == without | set(both)
     assert without.isdisjoint(both)
 
 
 def test_definition_geometry_carries_its_materials(
-    objects: list[dict], version: data.SpeckleVersion, which: str
+    objects: list[dict], plain: Collection, version: data.SpeckleVersion, which: str
 ) -> None:
     targets = material_targets(objects[0])
     definition_geometry = {
@@ -174,7 +205,6 @@ def test_definition_geometry_carries_its_materials(
     }
     assert len(styled) == N_STYLED_DEFINITION_GEOMETRIES[which]
     assert styled <= definition_geometry  # no proxy targets geometry that is not there
-    plain = bundle_model(data.fetch_bundle(version.bundle)).to_base()
     assert not any(
         target.startswith(DEFINITION_GEOMETRY_PREFIX)
         for proxy in plain["renderMaterialProxies"]
@@ -198,9 +228,80 @@ def test_bundle_model(version: data.SpeckleVersion, which: str) -> None:
     assert len(model.objects) == N_BUNDLE_OBJECTS[which]
     assert len(model.levels) == {"arch": 5, "str": 4, "mep": 4}[which]
     assert model.properties["modelPlacement.source"] == "projectBasePoint"
-    assert model.geometries  # read from the folder, which stays where it is
-    del model
-    assert folder.is_dir()
+    assert model.geometries  # read from the folder
+
+
+def test_closing_a_bundle_model_keeps_its_folder(tmp_path: Path) -> None:
+    """specklepy's Model deletes its folder on close(), and so at the end of `with model:`;
+    the folder of bundle_model is the user's (the data cache, or a shared mirror)."""
+    copy = tmp_path / "str"
+    shutil.copytree(data.fetch_bundle(data.RVT_SPECKLE_STR.bundle), copy)
+    with bundle_model(copy) as model:
+        n_geometries = len(model.geometries)
+    assert n_geometries > 0
+    model.close()
+    assert sorted(path.name for path in copy.iterdir()) == sorted(
+        f"advanced_sample_project_str.{table}.parquet" for table in data.BUNDLE_TABLES
+    )
+    assert len(bundle_objects(copy)) == N_OBJECTS["str"]
+
+
+def test_only_the_json_pipeline_warning_is_silenced() -> None:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        objects = bundle_objects(data.fetch_bundle(data.RVT_SPECKLE_STR.bundle))
+        warnings.warn("another deprecation", DeprecationWarning, stacklevel=1)
+    assert len(objects) == N_OBJECTS["str"]
+    assert [str(warning.message) for warning in caught] == ["another deprecation"]
+
+
+def test_own_geometry_without_its_first_placement() -> None:
+    """When an element's first placement has no instance node, specklepy names its other
+    placements -instance-1, ... and none after the element: the own geometry goes before
+    the first of them. Without any placement in the tree it goes to the root."""
+    model = bundle_model(data.fetch_bundle(data.RVT_SPECKLE_STR.bundle))
+    bundle = model.bundle
+    edges = bundle.relations.display_instance_edges
+    by_object: dict[int, list] = {}
+    for edge in edges:
+        by_object.setdefault(edge.src, []).append(edge)
+    # two str elements with own geometry and one placement each
+    shifted, unplaced = [
+        object_k
+        for object_k, placed in sorted(by_object.items())
+        if len(placed) == 1 and bundle.relations.display_by_object(object_k)
+    ][:2]
+    # `shifted`: a second placement on a copy of its instance node, then the first node
+    # dropped, so that the remaining placement is -instance-1
+    (first,) = by_object[shifted]
+    second = max(bundle.nodes) + 1
+    bundle.nodes[second] = bundle.nodes[first.dst]
+    edges.append(dataclasses.replace(first, dst=second, ord=first.ord + 1))
+    del bundle.nodes[first.dst]
+    # `unplaced`: its only instance node dropped
+    del bundle.nodes[by_object[unplaced][0].dst]
+    root = model.to_base()
+    _keep_element_geometry(model, root)
+    shifted_id = bundle.object_app_ids[shifted]
+    unplaced_id = bundle.object_app_ids[unplaced]
+    ids = [child.applicationId for child in root.elements if not isinstance(child, Collection)]
+    names = placements(root)
+    assert f"{shifted_id}-instance-1" in names
+    assert shifted_id not in names and f"{shifted_id}{FIRST_PLACEMENT_SUFFIX}" not in names
+    assert unplaced_id not in names
+    assert unplaced_id in ids  # appended to the root
+    flat: list[str] = []
+
+    def walk(collection: Collection) -> None:
+        for child in collection.elements:
+            if isinstance(child, Collection):
+                walk(child)
+            else:
+                flat.append(child.applicationId)
+
+    walk(root)
+    assert flat.index(shifted_id) == flat.index(f"{shifted_id}-instance-1") - 1
+    assert flat.count(shifted_id) == 1 and flat.count(unplaced_id) == 1
 
 
 def test_bundle_locations(tmp_path: Path) -> None:

@@ -13,7 +13,7 @@ import re
 import shutil
 import urllib.parse
 import urllib.request
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import NamedTuple
 
 DATA_URL = "http://r2.eu.bedrock.engineer/bimpolars/"
@@ -65,7 +65,12 @@ BUNDLE_TABLES: tuple[str, ...] = (
     "geometries",
 )
 """The tables of a Revit bundle (rvextract schema 1.5), each a ``<name>.<table>.parquet`` file,
-which :func:`fetch_bundle` fetches."""
+which :func:`fetch_bundle` fetches.
+
+A bundle with more than 1.5 GiB of uncompressed geometry has overflow shards,
+``<name>.geometries.<N>.parquet``, which this list does not name and :func:`fetch_bundle`
+does not fetch: the elements whose geometry is in them would have no mesh. The RVT samples
+have one shard each. Read such a bundle from a complete folder instead."""
 
 
 class SpeckleVersion(NamedTuple):
@@ -124,17 +129,24 @@ def bucket_key(key_or_url: str) -> str:
             (``http`` or ``https``) followed by the key, percent-encoded or not.
 
     Returns:
-        The key.
+        The key, relative to the bucket and to :func:`data_dir`.
 
     Raises:
-        ValueError: If a URL is not in the bucket; fetch such a file yourself.
+        ValueError: If a URL is not in the bucket (fetch such a file yourself), or the key
+            would leave the data folder: an absolute path, a drive, or a ``..`` segment.
     """
-    if not _URL.match(key_or_url):
-        return key_or_url
-    for base in (DATA_URL, DATA_URL.replace("http://", "https://", 1)):
-        if key_or_url.startswith(base):
-            return urllib.parse.unquote(key_or_url[len(base) :])
-    raise ValueError(f"{key_or_url!r} is not in the bucket {DATA_URL}: fetch it yourself")
+    key = key_or_url
+    if _URL.match(key_or_url):
+        for base in (DATA_URL, DATA_URL.replace("http://", "https://", 1)):
+            if key_or_url.startswith(base):
+                key = urllib.parse.unquote(key_or_url[len(base) :])
+                break
+        else:
+            raise ValueError(f"{key_or_url!r} is not in the bucket {DATA_URL}: fetch it yourself")
+    path = PureWindowsPath(key)  # splits on / and \, and knows drives
+    if not key or path.anchor or ".." in path.parts:
+        raise ValueError(f"{key_or_url!r} does not name a key inside the bucket")
+    return key
 
 
 def fetch(key: str, *, download: bool = True) -> Path:
@@ -181,7 +193,8 @@ def fetch_bundle(prefix: str, *, download: bool = True) -> Path:
     Args:
         prefix: The key prefix of the bundle's tables, such as ``RVT_SPECKLE_ARCH.bundle``,
             or its URL in the bucket (:func:`bucket_key`): every table of
-            :data:`BUNDLE_TABLES` is fetched as ``<prefix>.<table>.parquet``.
+            :data:`BUNDLE_TABLES` is fetched as ``<prefix>.<table>.parquet``. Overflow
+            geometry shards are not (see :data:`BUNDLE_TABLES`).
         download: Whether to download the tables that are not in :func:`data_dir`.
 
     Returns:

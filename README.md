@@ -119,7 +119,14 @@ a Speckle bundle to those objects does, and is the extra `[speckle]` (see [Speck
   `BIMPOLARS_DATA_DIR`, else `$XDG_CACHE_HOME/bimpolars`, else `~/.cache/bimpolars`. The key
   may be given as its URL in the bucket. `bimpolars.data.fetch_bundle(prefix)` fetches the
   tables of a Speckle bundle (`bimpolars.data.BUNDLE_TABLES`) the same way and gives their
-  folder.
+  folder; a bundle's overflow geometry shards (`<name>.geometries.<N>.parquet`, past 1.5 GiB
+  of geometry) are not among them, so read such a bundle from a complete folder.
+- `bimpolars.data.bucket_key(key_or_url)`: the key of a URL in the bucket (`http` or `https`,
+  percent-encoded or not), which `fetch` and `fetch_bundle` use; a URL outside the bucket, or
+  a key that would leave the data folder (absolute, a drive or `..`), raises `ValueError`.
+- `bimpolars.speckle.bundle_folder(bundle)`: the local folder of a bundle given as a folder or
+  as its URL in the bucket (fetched with `fetch_bundle`), as `read_speckle` and
+  `bimpolars.bundle` take it.
 
 ## Georeferencing
 

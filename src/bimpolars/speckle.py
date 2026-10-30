@@ -27,7 +27,7 @@ import numpy as np
 import polars as pl
 
 from bimpolars.crs import LinearUnit, engineering_crs
-from bimpolars.data import bucket_key, fetch_bundle
+from bimpolars.data import fetch_bundle
 from bimpolars.frame import BimDataFrame
 from bimpolars.mesh import UNSTYLED, Mesh, Style, mesh_frame, styled_mesh
 from bimpolars.properties import properties_series
@@ -259,6 +259,7 @@ def read_speckle(
             face list or an instance transform of the wrong length; or if the bundle folder is
             missing, its URL is outside the bucket, it lacks ``eav.objects``, ``eav.paths`` or
             ``eav.eav``, or holds two tables of one name.
+        urllib.error.URLError: If downloading a table of a bundle named by its URL fails.
     """
     if not objects:
         raise ValueError("no objects: the root object must come first")
@@ -524,8 +525,9 @@ def bundle_folder(bundle: str | os.PathLike[str]) -> Path:
 
     Raises:
         ValueError: If the folder does not exist, or the URL is not in the bucket.
+        urllib.error.URLError: If downloading a table of a bundle named by its URL fails.
     """
-    if isinstance(bundle, str) and bucket_key(bundle) != bundle:
+    if isinstance(bundle, str) and "://" in bundle:
         return fetch_bundle(bundle)
     folder = Path(bundle)
     if not folder.is_dir():

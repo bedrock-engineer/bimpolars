@@ -89,19 +89,27 @@ the `mesh` and `bbox` columns from it.
   numbers as the fallback. The CRS is the root's `units`, else the bundle's, else the meshes'
   most common, else metres; never the Revit geolocation. No specklepy here: a bundle's SGEO
   geometry is decoded by `bundle_objects`. A bundle is a folder, a mapping of tables, or its
-  URL in the bucket (`data.bucket_key` strips `DATA_URL`, http or https; `bundle_folder`
-  fetches the tables into the data folder; any other URL raises).
+  URL in the bucket (`data.bucket_key` strips `DATA_URL`, http or https, and refuses keys that
+  leave the data folder; `bundle_folder` fetches the tables into the data folder; any other
+  URL raises). `fetch_bundle` knows the 18 `BUNDLE_TABLES`, not the overflow geometry shards
+  `<name>.geometries.<N>.parquet` specklepy writes past 1.5 GiB, so a bundle that large must
+  come from a complete folder (a listing comes with the generic-bucket decision on #21).
 - `bundle_objects` (`bundle.py`) is specklepy's `Model.to_base()` on the `Model` that
-  `bundle_model` builds from the folder (never `Model.close()` or `with`: it deletes the
-  folder), with two fixes on the Base tree before serialization: the own geometry of an
-  element that has placements (`base_projection._geometry_object`, private, hence the exact
-  pin `specklepy[bundle]==2026.9.1`) is inserted before its first placement, which is renamed
-  `<applicationId>-instance-0`; and the material proxies get `def-geo-<k>` targets for the
-  definition geometry the envelope's `HAS_MATERIAL` styles (a geometry in a `DEFINES`
-  relation without a `DISPLAY` owner), the proxies in the envelope's node order. The
-  serialization is specklepy's deprecated JSON pipeline (`BaseObjectSerializer` into a
-  `MemoryTransport`, its DeprecationWarning silenced), root first. On the three RVT bundles
-  the objects and the `read_speckle` frames equal the bucket's (`tests/test_bundle.py`).
+  `bundle_model` builds from the folder (`_FolderModel`, whose `close()`, and so `with`, keeps
+  the folder; specklepy's own deletes it), with two fixes on the Base tree before
+  serialization: the own geometry of an element that has placements
+  (`base_projection._geometry_object`, private like `_materials`, hence the exact pin
+  `specklepy[bundle]==2026.9.1`) is inserted before its first placement, which is renamed
+  `<applicationId>-instance-0` (before the first `-instance-N` if there is no plain one, at
+  the root if there is none; never dropped); and the material proxies get `def-geo-<k>`
+  targets for the definition geometry the envelope's `HAS_MATERIAL` styles (a geometry in a
+  `DEFINES` relation without a `DISPLAY` owner), the proxies as `_materials` builds them, in
+  the envelope's node order. The serialization is specklepy's deprecated JSON pipeline
+  (`BaseObjectSerializer` into a `MemoryTransport`; only its own DeprecationWarning is
+  silenced, by message), root first. On the three RVT bundles every non-root object has the
+  bucket's id (content hash) and the `read_speckle` frames are equal
+  (`tests/test_bundle.py`); the root differs in the proxies' ids only, because the notebook
+  wrote them as its own JSON.
 - `plan_outline` retries a union that GEOS's floating-point overlay fails on (one MEP stair
   mesh of 720 faces does: `e1d4bdfb-2688-47c1-a386-3b48116e5fd2-0008cb48`, pinned in
   `test_mep`) with `grid_size` = the sliver fraction times the extent, which is the
