@@ -8,6 +8,7 @@ import numpy as np
 import polars as pl
 import pytest
 import shapely
+import shapely.errors
 
 from bimpolars import (
     FEATURE_COLUMNS,
@@ -112,6 +113,28 @@ def test_sliver_triangles_are_left_out() -> None:
     assert plan_outline(vertices, faces).is_empty
     vertices[2, 1] = 1e-6  # a plan area of 5e-6 is above 1e-9 times the extent squared
     assert plan_outline(vertices, faces).area == pytest.approx(5e-6)
+
+
+def test_a_failed_union_is_retried_on_a_grid(monkeypatch: pytest.MonkeyPatch) -> None:
+    # GEOS's floating-point overlay can throw on many nearly coincident triangles (an MEP
+    # stair of the Speckle tests does); the retry on a grid of the sliver fraction times the
+    # extent gives the same outline for a sound mesh
+    calls: list[dict[str, Any]] = []
+    union_all = shapely.union_all
+
+    def failing_once(geometries: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise shapely.errors.GEOSException("TopologyException: found non-noded intersection")
+        return union_all(geometries, **kwargs)
+
+    monkeypatch.setattr(shapely, "union_all", failing_once)
+    cube = box(0, 0, 0, 10, 10, 10)
+    vertices = np.asarray(cube["vertices"]).reshape(-1, 3)
+    faces = np.asarray(cube["faces"]).reshape(-1, 3)
+    outline = plan_outline(vertices, faces)
+    assert calls == [{}, {"grid_size": pytest.approx(1e-8)}]
+    assert outline.equals(shapely.box(0, 0, 10, 10))
 
 
 def test_clamp_keeps_an_outline_inside_its_box() -> None:

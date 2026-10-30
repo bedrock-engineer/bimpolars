@@ -15,8 +15,6 @@ import urllib.request
 from pathlib import Path
 from typing import NamedTuple
 
-from bimpolars.speckle import BUNDLE_TABLES
-
 DATA_URL = "http://r2.eu.bedrock.engineer/bimpolars/"
 """The bucket the data is downloaded from; a key is appended to it."""
 
@@ -36,9 +34,34 @@ RVT_ADVANCED_SAMPLE_ARCH = "rvt-advanced-sample-arch.ifc"
 """Revit Advanced Sample Project, architecture: IFC2X3 in millimetres, 5696 elements."""
 
 RVT_SPECKLE_V3_OBJECTS = "rvt-advanced-sample/speckle-v3-objects.parquet"
-"""The v3 objects of the three Revit Advanced Sample versions on app.speckle.systems, one row
-per object (``version_id``, ``object_id``, ``is_root``, ``content``), as
-:func:`bimpolars.speckle.version_objects` reads them."""
+"""The v3 objects of the Revit Advanced Sample versions on app.speckle.systems, one row per
+object (``version_id``, ``object_id``, ``is_root``, ``content``), as
+:func:`bimpolars.speckle.version_objects` reads them: the arch, str and mep versions below,
+projected from their bundles, and ``5cb009bb77`` (model ``e7f5f7f943``), the IFC export of
+the arch model received by Speckle's importer: 9730 objects in metres, no bundle."""
+
+BUNDLE_TABLES: tuple[str, ...] = (
+    "eav.eav",
+    "eav.model",
+    "eav.object_type",
+    "eav.objects",
+    "eav.path_stats",
+    "eav.paths",
+    "eav.revit_external_links",
+    "eav.revit_views",
+    "eav.revit_warnings",
+    "eav.type_eav",
+    "eav.types",
+    "envelope.meta",
+    "envelope.node_kinds",
+    "envelope.nodes",
+    "envelope.rel_types",
+    "envelope.relations",
+    "envelope.scene_views",
+    "geometries",
+)
+"""The tables of a Revit bundle (rvextract schema 1.5), each a ``<name>.<table>.parquet`` file,
+which :func:`fetch_bundle` fetches."""
 
 
 class SpeckleVersion(NamedTuple):
@@ -61,18 +84,18 @@ _RVT_BUNDLES = "rvt-advanced-sample/speckle-bundle"
 RVT_SPECKLE_ARCH = SpeckleVersion(
     "363cae173a", "d5e5bacdde", f"{_RVT_BUNDLES}/363cae173a/d5e5bacdde/advanced_sample_project_arch"
 )
-"""Revit Advanced Sample Project, architecture, on Speckle: 12,915 v3 objects, 5872 bundle
+"""Revit Advanced Sample Project, architecture, on Speckle: 13,194 v3 objects, 5872 bundle
 objects on 5 levels, in millimetres."""
 
 RVT_SPECKLE_STR = SpeckleVersion(
     "35e9a2fa3b", "b66058b4d1", f"{_RVT_BUNDLES}/35e9a2fa3b/b66058b4d1/advanced_sample_project_str"
 )
-"""Revit Advanced Sample Project, structure, on Speckle: 2291 v3 objects, 935 bundle objects."""
+"""Revit Advanced Sample Project, structure, on Speckle: 5355 v3 objects, 935 bundle objects."""
 
 RVT_SPECKLE_MEP = SpeckleVersion(
     "ef7cb591fc", "4413abe507", f"{_RVT_BUNDLES}/ef7cb591fc/4413abe507/advanced_sample_project_mep"
 )
-"""Revit Advanced Sample Project, MEP, on Speckle: 16,139 v3 objects, 8625 bundle objects."""
+"""Revit Advanced Sample Project, MEP, on Speckle: 16,173 v3 objects, 8625 bundle objects."""
 
 
 def data_dir() -> Path:
@@ -129,7 +152,7 @@ def fetch_bundle(prefix: str, *, download: bool = True) -> Path:
 
     Args:
         prefix: The key prefix of the bundle's tables, such as ``RVT_SPECKLE_ARCH.bundle``:
-            every table of :data:`bimpolars.speckle.BUNDLE_TABLES` is fetched as
+            every table of :data:`BUNDLE_TABLES` is fetched as
             ``<prefix>.<table>.parquet``.
         download: Whether to download the tables that are not in :func:`data_dir`.
 

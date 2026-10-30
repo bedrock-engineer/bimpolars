@@ -7,22 +7,10 @@ import pytest
 
 from bimpolars import BBOX_DTYPE, MESH_DTYPE, BimDataFrame, data, read_ifc, read_parquet
 from bimpolars.frame import MODEL_COLUMNS
-from bimpolars.ifc import DEFAULT_RGBA
+from bimpolars.mesh import UNSTYLED_RGBA
+from tests.synthetic import style_faces
 
 SPATIAL = ["IfcSite", "IfcBuilding", "IfcBuildingStorey"]
-
-
-def style_faces(frame: pl.DataFrame) -> pl.DataFrame:
-    """Per row with a mesh: the face count and the sum of the styles' face counts."""
-    mesh = pl.col("mesh").struct
-    return frame.filter(pl.col("mesh").is_not_null()).select(
-        "id",
-        n_faces=mesh.field("faces").list.len() // 3,
-        n_faces_styled=mesh.field("styles")
-        .list.eval(pl.element().struct.field("face_count"))
-        .list.sum(),
-        n_styles=mesh.field("styles").list.len(),
-    )
 
 
 def test_columns(sixty5_structural: BimDataFrame) -> None:
@@ -78,7 +66,7 @@ def test_styles_match_the_surface_styles(
     assert len(named) == 14
     assert named <= in_file
     unstyled = styles.filter(pl.col("name").is_null())
-    assert unstyled["rgba"].unique().to_list() == [list(DEFAULT_RGBA)]
+    assert unstyled["rgba"].unique().to_list() == [list(UNSTYLED_RGBA)]
     rgba = styles["rgba"].to_numpy()
     assert rgba.min() >= 0 and rgba.max() <= 1
     assert styles["face_count"].min() > 0
