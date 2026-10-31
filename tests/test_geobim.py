@@ -275,7 +275,8 @@ def test_to_crs_refuses_a_frame_of_several_crss() -> None:
     with pytest.raises(ValueError, match="2 CRSs"):
         with_geog(mixed)
     # Moved one CRS at a time, both halves land where the site's rows land
-    parts = [to_crs(BimDataFrame(part), "EPSG:7415") for part in mixed.partition_by("bim_crs")]
+    by_crs = mixed.group_by("bim_crs", maintain_order=True)
+    parts = [to_crs(part, "EPSG:7415") for _, part in by_crs]
     moved = concat(parts)
     assert moved.crs == rd.crs
     np.testing.assert_allclose(vertices(moved), np.vstack([vertices(rd)] * 2), atol=1e-9)
@@ -886,6 +887,29 @@ def test_to_crs_leaves_geog_as_it_is() -> None:
     assert geographic.frame["geog"].equals(placed.frame["geog"])
     moved = coordinates(footprints(geographic)[3])
     assert np.abs(moved - coordinates(geogs(placed)[3])).max() < 1e-9
+
+
+def test_a_model_without_rows_moves_without_a_crs() -> None:
+    none = column_model(COLUMN_FOOTPRINT).head(0)
+    assert len(to_crs(none, "EPSG:7415")) == 0
+    geog = with_geog(none)
+    assert len(geog) == 0
+    assert geog.frame.schema["geog"] == pl.Binary
+    with pytest.raises(ValueError, match="three"):
+        to_crs(none, "EPSG:28992")
+
+
+@pytest.mark.filterwarnings("ignore:the best transformation")
+def test_a_web_map_of_models_in_two_crss_is_geoparquet(tmp_path) -> None:
+    """geog is in OGC:CRS84h on every row, so writing it needs no single BIM CRS."""
+    site = with_geog(column_model(COLUMN_FOOTPRINT))
+    web = concat([site, to_crs(site, "EPSG:7415")]).drop("footprint")
+    path = tmp_path / "web.parquet"
+    web.write_parquet(path)
+    geo = json.loads(pl.read_parquet_metadata(path)[GEO_METADATA_KEY])
+    assert list(geo["columns"]) == ["geog"]
+    with pytest.raises(ValueError, match="2 CRSs"):
+        concat([site, to_crs(site, "EPSG:7415")]).write_parquet(tmp_path / "both.parquet")
 
 
 @pytest.mark.filterwarnings("ignore:the best transformation")

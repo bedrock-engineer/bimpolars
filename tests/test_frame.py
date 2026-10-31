@@ -8,6 +8,7 @@ import pytest
 import bimpolars as bpl
 from bimpolars import BBOX_DTYPE, MESH_DTYPE, BimDataFrame, engineering_crs, read_parquet
 from bimpolars.frame import CRS_COLUMN, CRS_DTYPE, METADATA_KEY, MODEL_COLUMNS, crs_text
+from bimpolars.geoparquet import GEO_METADATA_KEY
 
 
 @pytest.fixture
@@ -123,6 +124,80 @@ def test_polars_methods_work_on_the_model(small: BimDataFrame) -> None:
     assert "filter" in dir(small)
 
 
+def test_in_and_iteration_go_over_the_columns(small: BimDataFrame) -> None:
+    assert "id" in small
+    assert "nothing" not in small
+    assert [column.name for column in small] == small.columns
+
+
+def test_results_whose_crs_column_is_no_crs_come_back_as_polars(small: BimDataFrame) -> None:
+    assert type(small.null_count()) is pl.DataFrame
+    assert type(small.select("id", CRS_COLUMN).describe()) is pl.DataFrame
+    assert type(small.select(pl.col(CRS_COLUMN).implode())) is pl.DataFrame
+
+
+def test_in_place_polars_methods_change_the_crs_with_the_rows(small: BimDataFrame) -> None:
+    """The CRS is read from bim_crs on every call, so none is left behind when it changes."""
+    bdf = BimDataFrame(small.frame.clone())
+    assert bdf.crs == small.crs
+    bdf.extend(bpl.set_crs(small, "EPSG:7415").frame)
+    with pytest.raises(ValueError, match="2 CRSs"):
+        _ = bdf.crs
+    with pytest.raises(ValueError, match="2 CRSs"):
+        bpl.to_crs(bdf, "EPSG:7415")
+    bdf.drop_in_place(CRS_COLUMN)
+    with pytest.raises(ValueError, match="lost its bim_crs column"):
+        _ = bdf.crs
+    assert "no bim_crs column" in repr(bdf)
+
+
+def test_the_same_crs_written_two_ways_is_one_crs(small: BimDataFrame) -> None:
+    assert BimDataFrame(small.frame, small.crs).equals(small)  # PROJJSON through pyproj
+    rd = bpl.set_crs(small, "EPSG:7415")
+    sorted_keys = json.loads(json.dumps(rd.projjson, sort_keys=True))
+    both = bpl.concat([rd, bpl.set_crs(small, sorted_keys)])
+    assert both.frame[CRS_COLUMN].n_unique() == 2
+    assert both.crs == rd.crs
+    # Engineering CRSs that differ only by name are two CRSs, which pyproj's == does not tell
+    other = bpl.set_crs(small, engineering_crs("Other model", unit="millimetre"))
+    with pytest.raises(ValueError, match="2 CRSs"):
+        _ = bpl.concat([small, other]).crs
+
+
+def test_text_that_is_no_crs_is_refused(small: BimDataFrame) -> None:
+    for text in ("EPSG:7415", '"x"', '{"name": "no type"}', '{"type": "Nonsense"}'):
+        with pytest.raises(ValueError, match="must hold CRSs as PROJJSON text"):
+            BimDataFrame(small.frame.with_columns(bim_crs=pl.lit(text)))
+
+
+def test_bimpolars_functions_take_the_frames_polars_hands_out(small: BimDataFrame) -> None:
+    declared = small.pipe(bpl.set_crs, "EPSG:7415")
+    assert isinstance(declared, BimDataFrame)
+    assert declared.crs == pyproj.CRS("EPSG:7415")
+    mixed = bpl.concat([small, declared])
+    parts = [bpl.set_crs(part, small.crs) for _, part in mixed.group_by(CRS_COLUMN)]
+    assert bpl.concat(parts).crs == small.crs
+    with pytest.raises(ValueError, match="no bim_crs column"):
+        bpl.to_crs(small.frame.drop(CRS_COLUMN), "EPSG:7415")
+
+
+def test_a_crs_goes_where_a_reader_puts_it(small: BimDataFrame, tmp_path) -> None:
+    """After bbox, however the frame gets its CRS, so that one model has one column order."""
+    extended = small.with_columns(footprint=pl.lit(None, dtype=pl.Binary))
+    assert extended.columns[-2:] == [CRS_COLUMN, "footprint"]
+    bare = extended.frame.drop(CRS_COLUMN)
+    assert BimDataFrame(bare, small.projjson).equals(extended)
+    assert bpl.set_crs(bare, small.projjson).equals(extended)
+    path = tmp_path / "version1.parquet"
+    metadata = {METADATA_KEY: json.dumps({"version": 1, "crs": small.projjson})}
+    bare.write_parquet(path, metadata=metadata)
+    old = read_parquet(path)
+    assert old.equals(extended)
+    assert len(bpl.concat([old, extended])) == 4
+    # A frame without model columns gets it last
+    assert BimDataFrame(pl.DataFrame({"x": [1]}), small.projjson).columns == ["x", CRS_COLUMN]
+
+
 def test_arrow_readers_see_the_frame(small: BimDataFrame) -> None:
     assert pl.DataFrame(small).equals(small.frame)
     assert BimDataFrame(pl.DataFrame(small)).equals(small)
@@ -149,8 +224,9 @@ def test_concat_keeps_the_crs_of_every_row(small: BimDataFrame) -> None:
         1,
         1,
     ]
+    assert bpl.concat([small, small.frame]).equals(both)  # a polars frame with bim_crs too
     with pytest.raises(TypeError, match="BimDataFrame"):
-        bpl.concat([small, small.frame])  # type: ignore[list-item]
+        bpl.concat([small, "small"])  # type: ignore[list-item]
     with pytest.raises(ValueError, match="at least one"):
         bpl.concat([])
 
@@ -230,6 +306,29 @@ def test_write_parquet_keeps_the_callers_metadata(small: BimDataFrame, tmp_path)
     assert metadata["source"] == "test"
     assert json.loads(metadata[METADATA_KEY]) == {"version": 2}
     assert read_parquet(path).equals(small)
+
+
+def test_write_parquet_keeps_the_callers_geo_without_a_geometry_column(
+    small: BimDataFrame, tmp_path
+) -> None:
+    path = tmp_path / "own.parquet"
+    own = json.dumps({"version": "1.1.0", "primary_column": "geom", "columns": {}})
+    small.write_parquet(path, metadata={GEO_METADATA_KEY: own})
+    assert pl.read_parquet_metadata(path)[GEO_METADATA_KEY] == own
+
+
+def test_a_model_without_rows_writes_its_footprints_with_an_unknown_crs(
+    small: BimDataFrame, tmp_path
+) -> None:
+    footprints = small.with_columns(footprint=pl.lit(None, dtype=pl.Binary))
+    none = footprints.filter(pl.col("class") == "IfcPile")
+    path = tmp_path / "none.parquet"
+    none.write_parquet(path)
+    geo = json.loads(pl.read_parquet_metadata(path)[GEO_METADATA_KEY])
+    assert geo["columns"]["footprint"]["crs"] is None
+    assert read_parquet(path).equals(none)
+    with pytest.raises(ValueError, match="no rows has no CRS"):
+        _ = none.crs
 
 
 def test_constructor_checks_its_arguments(small: BimDataFrame) -> None:

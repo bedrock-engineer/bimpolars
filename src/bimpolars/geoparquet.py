@@ -72,7 +72,7 @@ _EWKB_FLAGS = 0xE0000000
 """The Z, M and SRID bits of extended WKB, which GeoParquet does not allow."""
 
 
-def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any]) -> dict[str, Any] | None:
+def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """Builds the GeoParquet ``geo`` metadata of a frame.
 
     Every column of :data:`GEOMETRY_COLUMNS` the frame has is listed with ``encoding`` WKB,
@@ -88,7 +88,8 @@ def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any]) -> dict[str, Any] 
 
     Args:
         frame: The frame about to be written.
-        crs: The BIM CRS as PROJJSON.
+        crs: The BIM CRS as PROJJSON, or None when it is unknown (a frame without rows has
+            none): the columns in it then get a null ``crs``, GeoParquet's unknown CRS.
 
     Returns:
         The metadata as a JSON-ready dict, or None when the frame has no geometry column.
@@ -109,10 +110,11 @@ def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any]) -> dict[str, Any] 
                 f"the geometry column {name!r} must be Binary WKB, not {frame.schema[name]}"
             )
         own_crs = COLUMN_CRS.get(name)
+        column_crs = own_crs if own_crs is not None else None if crs is None else dict(crs)
         column: dict[str, Any] = {
             "encoding": "WKB",
             "geometry_types": _wkb_geometry_types(frame[name]),
-            "crs": copy.deepcopy(own_crs if own_crs is not None else dict(crs)),
+            "crs": copy.deepcopy(column_crs),
         }
         if own_crs is not None:
             bounds = _wkb_bounds(frame[name])

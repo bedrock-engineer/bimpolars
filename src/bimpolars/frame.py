@@ -5,7 +5,7 @@ from __future__ import annotations
 import functools
 import importlib
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import IO, Any, Literal
 
@@ -13,7 +13,7 @@ import polars as pl
 import pyproj
 
 from bimpolars.crs import CRSLike, resolve_crs
-from bimpolars.geoparquet import GEO_METADATA_KEY, GEOMETRY_COLUMNS, geo_metadata
+from bimpolars.geoparquet import COLUMN_CRS, GEO_METADATA_KEY, GEOMETRY_COLUMNS, geo_metadata
 
 CRS_COLUMN = "bim_crs"
 """The column that holds the BIM CRS of every row, as PROJJSON text."""
@@ -122,10 +122,13 @@ class BimDataFrame:
     always OGC:CRS84h. The BIM CRS sits in the :data:`CRS_COLUMN` column (``bim_crs``) as
     PROJJSON text, the same value on every row of one model, so it travels with the rows
     through every polars operation: a concat of models in different CRSs keeps each row's.
+    The column is the one place the CRS is kept: :attr:`crs` reads it on every call.
 
-    Polars methods work on the BimDataFrame itself: ``bdf.filter(...)``, ``bdf["id"]`` and
-    ``pl.DataFrame(bdf)`` go to :attr:`frame`, and a result that is a DataFrame with the
-    ``bim_crs`` column comes back as a BimDataFrame. :func:`concat` stacks models.
+    Polars methods work on the BimDataFrame itself: ``bdf.filter(...)``, ``bdf["id"]``,
+    ``"id" in bdf`` and ``pl.DataFrame(bdf)`` go to :attr:`frame`, and a result that is a
+    DataFrame with a Categorical ``bim_crs`` column comes back as a BimDataFrame. A polars
+    method that takes a function (``pipe``, a ``group_by`` loop) hands it the plain frame,
+    which the bimpolars functions take as well. :func:`concat` stacks models.
 
     Attributes:
         frame: The elements, one row each, ``bim_crs`` included.
@@ -133,26 +136,28 @@ class BimDataFrame:
         projjson: The BIM CRS as a PROJJSON dict.
     """
 
-    __slots__ = ("_crs_cache", "_frame", "_projjson_cache")
+    __slots__ = ("_frame",)
 
     def __init__(self, frame: pl.DataFrame, crs: CRSLike | None = None) -> None:
         """Wraps a frame of elements, reading the BIM CRS from its ``bim_crs`` column.
 
         Args:
             frame: The elements, one row each. A ``bim_crs`` column of PROJJSON text, String
-                or Categorical, becomes :data:`CRS_DTYPE`.
+                or Categorical, becomes :data:`CRS_DTYPE`; pyproj must read every value.
             crs: The BIM CRS of a frame without the ``bim_crs`` column, in any form: PROJJSON
                 (see :func:`bimpolars.engineering_crs`), a ``pyproj.CRS``, or user input such
                 as ``"EPSG:7415"``. It is stored as PROJJSON text in a new ``bim_crs`` column,
-                the last one. A frame that has the column already must hold ``crs`` on every
-                row; :func:`bimpolars.set_crs` replaces a CRS.
+                where :data:`MODEL_COLUMNS` puts it (see :func:`with_crs_column`). A frame
+                that has the column already must hold ``crs`` on every row;
+                :func:`bimpolars.set_crs` replaces a CRS.
 
         Raises:
             TypeError: If ``frame`` is not a polars DataFrame, or its ``bim_crs`` column is
                 neither String nor Categorical.
             ValueError: If the frame has no ``bim_crs`` column and ``crs`` is not given, or
-                it has one that does not hold ``crs`` on every row; if ``crs`` is PROJJSON
-                without a ``type``, or pyproj cannot read it.
+                it has one that does not hold ``crs`` on every row; if a ``bim_crs`` value or
+                ``crs`` is not a CRS pyproj can read, or ``crs`` is PROJJSON without a
+                ``type``.
         """
         if not isinstance(frame, pl.DataFrame):
             raise TypeError(f"frame must be a polars DataFrame, not {type(frame).__name__}")
@@ -165,23 +170,27 @@ class BimDataFrame:
                     f"the {CRS_COLUMN} column must hold PROJJSON text, String or Categorical, "
                     f"not {dtype}"
                 )
+            texts = _texts(frame[CRS_COLUMN])
+            for text in texts:
+                _crs_of(text)
         if crs is not None:
-            text = crs_text(_as_projjson(crs))
+            projjson = _as_projjson(crs)
+            given = _crs_of(crs_text(projjson))
             if CRS_COLUMN not in frame.columns:
-                frame = frame.with_columns(pl.lit(text, dtype=CRS_DTYPE).alias(CRS_COLUMN))
-            elif not (frame[CRS_COLUMN] == text).all(ignore_nulls=False):
+                frame = with_crs_column(frame, projjson)
+            elif frame[CRS_COLUMN].null_count() or not all(
+                _crs_of(text).is_exact_same(given) for text in texts
+            ):
                 raise ValueError(
-                    f"the frame's {CRS_COLUMN} column does not hold the CRS "
-                    f"{json.loads(text).get('name')!r} on every row: it is "
-                    f"{_describe(frame[CRS_COLUMN])}; use bimpolars.set_crs to replace it"
+                    f"the frame's {CRS_COLUMN} column does not hold the CRS {given.name!r} on "
+                    f"every row: it is {_describe(frame[CRS_COLUMN])}; use bimpolars.set_crs "
+                    "to replace it"
                 )
         elif CRS_COLUMN not in frame.columns:
             raise ValueError(
                 f"the frame has no {CRS_COLUMN} column: pass its CRS, BimDataFrame(frame, crs)"
             )
         self._frame = frame
-        self._projjson_cache: dict[str, Any] | None = None
-        self._crs_cache: pyproj.CRS | None = None
 
     @property
     def frame(self) -> pl.DataFrame:
@@ -190,15 +199,17 @@ class BimDataFrame:
 
     @property
     def crs(self) -> pyproj.CRS:
-        """The BIM CRS as a ``pyproj.CRS``, read from the one value of ``bim_crs``.
+        """The BIM CRS as a ``pyproj.CRS``: the one CRS of ``bim_crs``, read on every call.
+
+        Values that pyproj reads as exactly the same CRS count as one, so the same PROJJSON
+        with its keys in another order, or after a round trip through pyproj, is one CRS.
+        An in-place polars method (``bdf.extend(...)``) changes the CRS with the rows.
 
         Raises:
-            ValueError: If ``bim_crs`` holds more than one CRS, has nulls, or the frame has no
-                rows.
+            ValueError: If ``bim_crs`` holds more than one CRS or nulls, or the frame has no
+                rows (and so no CRS).
         """
-        if self._crs_cache is None:
-            self._crs_cache = pyproj.CRS.from_json_dict(self.projjson)
-        return self._crs_cache
+        return _crs_of(self._crs_text())
 
     @property
     def projjson(self) -> dict[str, Any]:
@@ -207,27 +218,55 @@ class BimDataFrame:
         Raises:
             ValueError: As :attr:`crs` raises it.
         """
-        if self._projjson_cache is None:
-            column = self._frame[CRS_COLUMN]
-            values = column.drop_nulls().unique()
-            if len(values) != 1 or column.null_count():
-                raise ValueError(
-                    f"a BimDataFrame needs one CRS here, but its {CRS_COLUMN} column holds "
-                    f"{_describe(column)}; take the rows of one CRS first, for example with "
-                    f"group_by({CRS_COLUMN!r})"
-                )
-            self._projjson_cache = json.loads(values[0])
-        return self._projjson_cache
+        projjson: dict[str, Any] = json.loads(self._crs_text())
+        return projjson
+
+    def _crs_text(self) -> str:
+        """The ``bim_crs`` value of the one CRS the rows are in."""
+        if CRS_COLUMN not in self._frame.columns:
+            raise ValueError(
+                f"the BimDataFrame lost its {CRS_COLUMN} column to an in-place polars method, "
+                "such as drop_in_place"
+            )
+        column = self._frame[CRS_COLUMN]
+        if not len(column):
+            raise ValueError(
+                f"a BimDataFrame with no rows has no CRS: the {CRS_COLUMN} of its rows gives it"
+            )
+        texts = _texts(column)
+        first = _crs_of(texts[0]) if texts else None
+        if (
+            first is None
+            or column.null_count()
+            or not all(_crs_of(text).is_exact_same(first) for text in texts[1:])
+        ):
+            raise ValueError(
+                f"a BimDataFrame needs one CRS here, but its {CRS_COLUMN} column holds "
+                f"{_describe(column)}; take the rows of one CRS first, for example with "
+                f"group_by({CRS_COLUMN!r})"
+            )
+        return texts[0]
 
     def __len__(self) -> int:
         return len(self._frame)
 
+    def __contains__(self, key: object) -> bool:
+        """Whether :attr:`frame` has a column of that name, as ``key in frame`` says."""
+        return key in self._frame.columns
+
+    def __iter__(self) -> Iterator[pl.Series]:
+        """The columns of :attr:`frame` as Series, as a polars DataFrame iterates."""
+        return iter(self._frame)
+
     def __getattr__(self, name: str) -> Any:
         """Hands polars attributes and methods through to :attr:`frame`.
 
-        A result that is a DataFrame with the ``bim_crs`` column comes back as a BimDataFrame;
-        anything else (a Series, a scalar, a frame without ``bim_crs``) as it is. BimDataFrame
-        arguments go in as their frames, so ``bdf.join(other, on="id")`` works.
+        A result that is a DataFrame with a Categorical ``bim_crs`` column comes back as a
+        BimDataFrame; anything else as it is: a Series, a scalar, a frame without ``bim_crs``
+        or one in which it became something else (counts from ``null_count``, text from
+        ``describe``). BimDataFrame arguments go in as their frames, so
+        ``bdf.join(other, on="id")`` works. A method that changes the frame in place changes
+        this BimDataFrame's frame.
         """
         if name.startswith("_"):  # copy and pickle look these up before _frame is set
             raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
@@ -256,21 +295,21 @@ class BimDataFrame:
 
     def __repr__(self) -> str:
         return (
-            f"BimDataFrame({len(self)} rows, crs={_label(self._frame[CRS_COLUMN])})\n"
-            f"{self._frame.drop(CRS_COLUMN)!r}"
+            f"BimDataFrame({len(self)} rows, crs={_label(self._frame)})\n"
+            f"{self._frame.drop(CRS_COLUMN, strict=False)!r}"
         )
 
     def _repr_html_(self) -> str:
         return (
-            f"<p><b>BimDataFrame</b>: crs {_label(self._frame[CRS_COLUMN])}</p>"
-            f"{self._frame.drop(CRS_COLUMN)._repr_html_()}"
+            f"<p><b>BimDataFrame</b>: crs {_label(self._frame)}</p>"
+            f"{self._frame.drop(CRS_COLUMN, strict=False)._repr_html_()}"
         )
 
     def _display_(self) -> object:
         """What marimo shows: the CRS name above an interactive table without ``bim_crs``."""
         mo = importlib.import_module("marimo")  # only marimo calls this, so it is there
-        header = mo.md(f"**BimDataFrame**: crs {_label(self._frame[CRS_COLUMN])}")
-        return mo.vstack([header, mo.ui.table(self._frame.drop(CRS_COLUMN))])
+        header = mo.md(f"**BimDataFrame**: crs {_label(self._frame)}")
+        return mo.vstack([header, mo.ui.table(self._frame.drop(CRS_COLUMN, strict=False))])
 
     def with_frame(self, frame: pl.DataFrame) -> BimDataFrame:
         """Wraps another frame, in this model's CRS when the frame has no ``bim_crs`` column.
@@ -322,25 +361,28 @@ class BimDataFrame:
         CRS, and ``bbox`` named as the covering of the columns in the BIM CRS (the x and y
         fields each footprint lies within), so that GeoParquet readers find the footprints
         with their CRS and skip row groups for a spatial filter. GeoParquet gives a column one
-        CRS, so such a frame needs one BIM CRS.
+        CRS, so a frame with ``footprint`` or ``lightbim`` needs one BIM CRS; ``geog`` alone
+        needs none, and a frame without rows writes those columns with a null CRS, which
+        GeoParquet reads as unknown.
 
         Args:
             file: Where to write: a path or a binary file object.
             **kwargs: Passed on to :meth:`polars.DataFrame.write_parquet`. A ``metadata`` dict
-                is written too, except that its :data:`METADATA_KEY` and ``geo`` entries,
-                if any, are replaced by the ones described above.
+                is written too, except that its :data:`METADATA_KEY` entry is replaced by the
+                one described above, and its ``geo`` entry too when the frame has a geometry
+                column.
 
         Raises:
-            ValueError: If the frame has a geometry column and not exactly one BIM CRS (see
-                :attr:`crs`).
+            ValueError: If the frame has rows, ``footprint`` or ``lightbim``, and not exactly
+                one BIM CRS (see :attr:`crs`).
         """
         metadata = dict(kwargs.pop("metadata", None) or {})
         metadata[METADATA_KEY] = json.dumps({"version": METADATA_VERSION})
-        metadata.pop(GEO_METADATA_KEY, None)
-        if any(column in self._frame.columns for column in GEOMETRY_COLUMNS):
-            geo = geo_metadata(self._frame, self.projjson)
-            if geo is not None:
-                metadata[GEO_METADATA_KEY] = json.dumps(geo)
+        present = [column for column in GEOMETRY_COLUMNS if column in self._frame.columns]
+        if present:
+            in_bim_crs = any(column not in COLUMN_CRS for column in present)
+            crs = self.projjson if in_bim_crs and len(self) else None
+            metadata[GEO_METADATA_KEY] = json.dumps(geo_metadata(self._frame, crs))
         self._frame.write_parquet(file, metadata=metadata, **kwargs)
 
     @classmethod
@@ -396,7 +438,9 @@ def read_parquet(source: str | Path | IO[bytes]) -> BimDataFrame:
     return BimDataFrame.read_parquet(source)
 
 
-def concat(bdfs: Iterable[BimDataFrame], *, how: ConcatMethod = "vertical") -> BimDataFrame:
+def concat(
+    bdfs: Iterable[BimDataFrame | pl.DataFrame], *, how: ConcatMethod = "vertical"
+) -> BimDataFrame:
     """Stacks models into one BimDataFrame, every row keeping its own CRS, like ``pl.concat``.
 
     Models in different CRSs stack too, each row with its own ``bim_crs``: the result then
@@ -404,7 +448,7 @@ def concat(bdfs: Iterable[BimDataFrame], *, how: ConcatMethod = "vertical") -> B
     models into one CRS first (:func:`bimpolars.to_crs`) to work on them as one.
 
     Args:
-        bdfs: The models.
+        bdfs: The models: BimDataFrames, or polars DataFrames with the ``bim_crs`` column.
         how: How the columns line up, as for ``pl.concat``: ``"vertical"`` needs the same
             columns, ``"diagonal"`` fills the missing ones with nulls, and the ``_relaxed``
             variants cast to a common dtype.
@@ -413,20 +457,62 @@ def concat(bdfs: Iterable[BimDataFrame], *, how: ConcatMethod = "vertical") -> B
         The rows of every model, in order.
 
     Raises:
-        TypeError: If an item is not a BimDataFrame.
-        ValueError: If there are no models.
+        TypeError: If an item is neither a BimDataFrame nor a polars DataFrame.
+        ValueError: If there are no models, or the result has no valid ``bim_crs`` column.
     """
     frames: list[pl.DataFrame] = []
     for bdf in bdfs:
-        if not isinstance(bdf, BimDataFrame):
-            raise TypeError(
-                f"concat stacks BimDataFrames, not {type(bdf).__name__}: wrap a frame with "
-                f"BimDataFrame(frame, crs) first"
-            )
-        frames.append(bdf.frame)
+        if isinstance(bdf, BimDataFrame):
+            frames.append(bdf.frame)
+        elif isinstance(bdf, pl.DataFrame):
+            frames.append(bdf)
+        else:
+            raise TypeError(f"concat stacks BimDataFrames, not {type(bdf).__name__}")
     if not frames:
         raise ValueError("concat needs at least one BimDataFrame")
     return BimDataFrame(pl.concat(frames, how=how))
+
+
+def as_bim_dataframe(bdf: BimDataFrame | pl.DataFrame) -> BimDataFrame:
+    """A model as a BimDataFrame, for the functions that take either.
+
+    Args:
+        bdf: A BimDataFrame, or a polars DataFrame with the ``bim_crs`` column (one that a
+            polars method such as ``pipe`` or a ``group_by`` loop handed out).
+
+    Returns:
+        ``bdf`` itself, or the frame as a BimDataFrame.
+
+    Raises:
+        TypeError: As :class:`BimDataFrame` raises it, for anything else.
+        ValueError: As :class:`BimDataFrame` raises it, for a frame without a valid
+            ``bim_crs`` column.
+    """
+    return bdf if isinstance(bdf, BimDataFrame) else BimDataFrame(bdf)
+
+
+def with_crs_column(frame: pl.DataFrame, projjson: Mapping[str, Any]) -> pl.DataFrame:
+    """The frame with ``bim_crs`` set to one CRS on every row.
+
+    A frame that has the column keeps it in its place. A frame without it gets it where
+    :data:`MODEL_COLUMNS` puts it, right after the frame's last model column (``bbox`` in a
+    model a reader built), or last if it has none, so that a model has one column order
+    however it got its CRS.
+
+    Args:
+        frame: The elements.
+        projjson: The CRS as PROJJSON.
+
+    Returns:
+        The frame with the CRS in ``bim_crs``, as :data:`CRS_DTYPE`.
+    """
+    column = pl.lit(crs_text(projjson), dtype=CRS_DTYPE).alias(CRS_COLUMN)
+    if CRS_COLUMN in frame.columns:
+        return frame.with_columns(column)
+    names = frame.columns
+    model = [index for index, name in enumerate(names) if name in MODEL_COLUMNS]
+    at = model[-1] + 1 if model else len(names)
+    return frame.select(*names[:at], column, *names[at:])
 
 
 def crs_text(projjson: Mapping[str, Any]) -> str:
@@ -453,8 +539,13 @@ def _as_projjson(crs: CRSLike) -> dict[str, Any]:
 
 
 def _wrap(value: Any) -> Any:
-    """A DataFrame with the ``bim_crs`` column as a BimDataFrame; anything else as it is."""
-    if isinstance(value, pl.DataFrame) and CRS_COLUMN in value.columns:
+    """A DataFrame with a Categorical ``bim_crs`` as a BimDataFrame; anything else as it is.
+
+    Only Categorical: polars keeps that dtype through the methods that keep the column a CRS
+    (``filter``, ``join``, ``with_columns``), and gives another to the ones that turn it into
+    something else (``null_count``, ``describe``, ``implode``).
+    """
+    if isinstance(value, pl.DataFrame) and value.schema.get(CRS_COLUMN) == CRS_DTYPE:
         return BimDataFrame(value)
     return value
 
@@ -464,10 +555,31 @@ def _unwrap(value: Any) -> Any:
     return value.frame if isinstance(value, BimDataFrame) else value
 
 
+def _texts(column: pl.Series) -> list[str]:
+    """The distinct values of a ``bim_crs`` column, in order of first appearance."""
+    texts: list[str] = column.drop_nulls().unique(maintain_order=True).cast(pl.String).to_list()
+    return texts
+
+
+@functools.lru_cache(maxsize=64)
+def _crs_of(text: str) -> pyproj.CRS:
+    """The CRS of a ``bim_crs`` value, parsed once for every frame that holds it."""
+    try:
+        projjson = json.loads(text)
+        if not isinstance(projjson, dict) or "type" not in projjson:
+            raise ValueError("it is not a JSON object with a 'type'")
+        return pyproj.CRS.from_json_dict(projjson)
+    except (ValueError, pyproj.exceptions.CRSError) as error:
+        start = text if len(text) <= 60 else f"{text[:60]}..."
+        raise ValueError(
+            f"the {CRS_COLUMN} column must hold CRSs as PROJJSON text, but it holds "
+            f"{start!r}: {error}"
+        ) from None
+
+
 def _names(column: pl.Series) -> list[str]:
     """The names of the CRSs a ``bim_crs`` column holds, in order of first appearance."""
-    texts = column.drop_nulls().unique(maintain_order=True).cast(pl.String)
-    return [str(json.loads(text).get("name")) for text in texts]
+    return [_crs_of(text).name for text in _texts(column)]
 
 
 def _describe(column: pl.Series) -> str:
@@ -486,8 +598,11 @@ def _describe(column: pl.Series) -> str:
     return " and ".join(parts)
 
 
-def _label(column: pl.Series) -> str:
-    """The CRS of a ``bim_crs`` column as a display shows it: one name, or what it holds."""
+def _label(frame: pl.DataFrame) -> str:
+    """The CRS of a frame's ``bim_crs`` as a display shows it: one name, or what it holds."""
+    if CRS_COLUMN not in frame.columns:
+        return f"(no {CRS_COLUMN} column)"
+    column = frame[CRS_COLUMN]
     names = _names(column)
     if len(names) == 1 and not column.null_count():
         return repr(names[0])

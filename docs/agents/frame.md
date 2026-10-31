@@ -16,15 +16,26 @@ the `LIGHTBIM_COLUMNS` ([lightbim.md](lightbim.md)) and `geobim.with_geog` the `
   A String column read back from Parquet holds a copy per row: 428 MB for 200,000 rows of
   EPSG:7415's 2.2 kB PROJJSON, against 2.3 MB as a Categorical, and its `unique()` is about
   25 times slower.
-- `bdf.projjson` and `bdf.crs` parse the column's one value and cache it on the wrapper. They
-  raise a ValueError that names the CRSs when the column holds several, has nulls, or the
-  frame has no rows (a filter that matches nothing). Code that needs the CRS reads them, and
-  so refuses a mixed frame; code that only carries rows (`simple_features`) does not.
+- The constructor checks that pyproj reads every value (`frame._crs_of`, which parses a text
+  once per process), so a display never meets text that is no CRS.
+- `bdf.projjson` and `bdf.crs` read the column on every call, with no cache on the wrapper:
+  an in-place polars method (`extend`, `insert_column`) changes the frame under it. Values
+  that pyproj reads as exactly the same CRS (`is_exact_same`, not `==`, which calls two
+  engineering CRSs that differ only by name equal) count as one. They raise a ValueError that
+  names the CRSs when the column holds several, has nulls, or the frame has no rows (a filter
+  that matches nothing). Code that needs the CRS reads them, and so refuses a mixed frame;
+  code that only carries rows (`simple_features`) does not, and a frame without rows goes
+  through `to_crs`, `with_geog` and `write_parquet` (with a null GeoParquet `crs`) unchanged.
 - Code that builds a frame keeps `bim_crs` and wraps it with `BimDataFrame(frame)`;
-  `geobim._with_crs` puts one CRS on every row (`set_crs`, `to_crs`). `concat` stacks models
-  and keeps each row's CRS.
-- `__getattr__` and `__getitem__` hand polars through and wrap a DataFrame result that kept
-  `bim_crs`; `__arrow_c_stream__` serves `pl.DataFrame(bdf)`, pyarrow and DuckDB.
+  `frame.with_crs_column` puts one CRS on every row (the constructor, `set_crs`, `to_crs`),
+  after the last model column when the frame has none yet, so a layout-1 file and a fresh
+  model get one column order. `concat` stacks models and keeps each row's CRS.
+- `__getattr__` and `__getitem__` hand polars through and wrap a DataFrame result whose
+  `bim_crs` is still Categorical (`null_count`, `describe` and `implode` turn it into
+  something else and come back as polars); `__contains__` and `__iter__` go over the
+  columns, like polars; `__arrow_c_stream__` serves `pl.DataFrame(bdf)`, pyarrow and DuckDB.
+  The public functions take a polars DataFrame with `bim_crs` too (`frame.as_bim_dataframe`),
+  because `pipe` and a `group_by` loop hand out plain frames.
   `mo.ui.table(bdf)` still fails: marimo picks a table by `isinstance` or narwhals, and
   neither reads the Arrow stream, so pass `bdf.frame` there. A cell whose output is `bdf`
   shows `_display_`: the CRS name above a table without `bim_crs`.

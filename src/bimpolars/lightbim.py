@@ -41,7 +41,7 @@ import polars as pl
 import shapely
 
 from bimpolars.features import _clamp_xy, plan_outline
-from bimpolars.frame import NATIVE_GEOM_DTYPE, BimDataFrame
+from bimpolars.frame import NATIVE_GEOM_DTYPE, BimDataFrame, as_bim_dataframe
 from bimpolars.mesh import mesh_arrays
 from bimpolars.properties import ATTRIBUTES_PSET
 
@@ -172,7 +172,9 @@ line (a pile exported as a footing) becomes a ``curve`` with the role ``pile``; 
 """
 
 
-def lightbim_features(bdf: BimDataFrame, *, kind: pl.Expr | None = None) -> pl.DataFrame:
+def lightbim_features(
+    bdf: BimDataFrame | pl.DataFrame, *, kind: pl.Expr | None = None
+) -> pl.DataFrame:
     """The LightBIM columns of a frame that has its footprints.
 
     Args:
@@ -201,7 +203,7 @@ def lightbim_features(bdf: BimDataFrame, *, kind: pl.Expr | None = None) -> pl.D
         TypeError: If ``kind`` evaluates to something other than a Struct or a String, or
             ``native_geom`` has values of another layout than :data:`bimpolars.NATIVE_GEOM_DTYPE`.
     """
-    frame = bdf.frame
+    frame = as_bim_dataframe(bdf).frame
     missing = [column for column in _REQUIRED_COLUMNS if column not in frame.columns]
     if missing:
         raise ValueError(f"the LightBIM reduction needs the columns {', '.join(missing)}")

@@ -16,7 +16,7 @@ import polars as pl
 import shapely
 import shapely.errors
 
-from bimpolars.frame import BimDataFrame
+from bimpolars.frame import BimDataFrame, as_bim_dataframe
 from bimpolars.geoparquet import GEOG_COLUMN
 from bimpolars.mesh import mesh_arrays
 
@@ -34,7 +34,7 @@ a sliver (a face that is vertical up to rounding) and is left out of the outline
 
 
 def simple_features(
-    bdf: BimDataFrame, *, lightbim: bool = False, kind: pl.Expr | None = None
+    bdf: BimDataFrame | pl.DataFrame, *, lightbim: bool = False, kind: pl.Expr | None = None
 ) -> BimDataFrame:
     """Adds the plan footprint of every element with a mesh, and the LightBIM reduction.
 
@@ -80,7 +80,7 @@ def simple_features(
     """
     if kind is not None and not lightbim:
         raise ValueError("kind decides the LightBIM kind: pass lightbim=True with it")
-    frame = bdf.frame
+    frame = as_bim_dataframe(bdf).frame
     missing = [column for column in _REQUIRED_COLUMNS if column not in frame.columns]
     if missing:
         raise ValueError(f"simple_features needs the columns {', '.join(missing)}")

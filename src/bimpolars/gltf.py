@@ -22,7 +22,7 @@ import numpy.typing as npt
 import polars as pl
 
 from bimpolars.crs import _linear_unit
-from bimpolars.frame import BimDataFrame
+from bimpolars.frame import BimDataFrame, as_bim_dataframe
 
 GLTF_VERSION = "2.0"
 """The glTF version the files declare."""
@@ -65,7 +65,7 @@ _Ints = npt.NDArray[np.int64]
 _Material = tuple[str | None, tuple[float, float, float, float]]
 
 
-def element_meshes_glb(bdf: BimDataFrame, *, normals: bool = True) -> bytes:
+def element_meshes_glb(bdf: BimDataFrame | pl.DataFrame, *, normals: bool = True) -> bytes:
     """Writes the meshes of a BimDataFrame as binary glTF, one primitive per style.
 
     Every row with a mesh is written, except the :data:`EXCLUDED_CLASSES` (an
@@ -85,7 +85,8 @@ def element_meshes_glb(bdf: BimDataFrame, *, normals: bool = True) -> bytes:
     (georeferenced in a projected CRS, for instance) keep their precision.
 
     Args:
-        bdf: A BimDataFrame with the ``mesh`` column (and ``class``, to leave openings out).
+        bdf: A BimDataFrame with the ``mesh`` column (and ``class``, to leave openings out),
+            or a polars DataFrame with those and ``bim_crs``, in one CRS.
         normals: Whether to write normals. With them every triangle gets its own three
             vertices with the face normal, so the glb is flat shaded in every viewer and holds
             three vertices per face of the ``mesh`` column (the meshes share vertices between
@@ -99,14 +100,17 @@ def element_meshes_glb(bdf: BimDataFrame, *, normals: bool = True) -> bytes:
         The glb file content.
 
     Raises:
-        ValueError: If the frame has no ``mesh`` column, the CRS has no linear unit, a mesh's
+        ValueError: If the frame has no ``mesh`` column, not exactly one BIM CRS (a frame
+            without rows has none), the CRS has no linear unit, a mesh's
             styles do not cover its faces exactly, a style has no colour, or a face points
             outside its mesh's vertices.
     """
+    bdf = as_bim_dataframe(bdf)
     frame = bdf.frame
     if "mesh" not in frame.columns:
         raise ValueError("element_meshes_glb needs the mesh column")
-    scale = _linear_unit(bdf.projjson).conversion_factor
+    projjson = bdf.projjson
+    scale = _linear_unit(projjson).conversion_factor
     # Select before filtering: a filter copies every column, and properties can be gigabytes
     columns = [name for name in ("class", "mesh") if name in frame.columns]
     keep = pl.col("mesh").is_not_null()
@@ -115,7 +119,7 @@ def element_meshes_glb(bdf: BimDataFrame, *, normals: bool = True) -> bytes:
         keep &= ~pl.col("class").cast(pl.String).is_in(EXCLUDED_CLASSES).fill_null(False)
     meshes = frame.select(columns).filter(keep)["mesh"]
     vertices, faces, materials, face_material = _geometry(meshes, scale)
-    glb = _Glb(name=bdf.projjson.get("name"), extras={"crs": bdf.projjson, "unit": UNIT})
+    glb = _Glb(name=projjson.get("name"), extras={"crs": projjson, "unit": UNIT})
     if len(vertices) == 0:
         return glb.to_bytes()
     vertices = glb.centre(vertices)

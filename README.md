@@ -76,11 +76,14 @@ as a PROJJSON dict (`bdf.projjson`). `bim_crs` covers the BIM geometry columns (
 `bbox`, `native_geom`, `footprint`, `lightbim`), not `geog`, which is always OGC:CRS84h.
 
 Since the CRS travels with the rows, polars works on the BimDataFrame itself: `bdf.filter(...)`,
-`bdf.join(...)` and `bdf.with_columns(...)` give a BimDataFrame, `bdf["id"]` is the Series, and
-`pl.DataFrame(bdf)` and DuckDB read it through the Arrow stream. `bimpolars.concat(bdfs)`
-stacks models, every row keeping its own CRS; a frame whose rows are in more than one CRS has
-no `bdf.crs` (it raises and names them) and `to_crs` refuses it. A notebook shows the CRS name
-once, above the table, without the `bim_crs` column; marimo's `mo.ui.table` takes `bdf.frame`.
+`bdf.join(...)` and `bdf.with_columns(...)` give a BimDataFrame, `bdf["id"]` is the Series,
+`"id" in bdf` and `for column in bdf` go over the columns, and `pl.DataFrame(bdf)` and DuckDB
+read it through the Arrow stream. The bimpolars functions also take the plain polars frames
+that `bdf.pipe(...)` and a `group_by` loop hand out, as long as they kept `bim_crs`.
+`bimpolars.concat(bdfs)` stacks models, every row keeping its own CRS; a frame whose rows are
+in more than one CRS, or that has no rows, has no `bdf.crs` (it raises and says why) and
+`to_crs` refuses it. A notebook shows the CRS name once, above the table, without the
+`bim_crs` column; marimo's `mo.ui.table` takes `bdf.frame`.
 
 ## Functions
 
@@ -137,8 +140,9 @@ once, above the table, without the `bim_crs` column; marimo's `mo.ui.table` take
   `pyproj.CRS`), `.projjson`, `.with_frame()` (a frame without `bim_crs` in this model's CRS),
   `.equals()`, `.write_parquet()` and `BimDataFrame.read_parquet()`, and every polars
   DataFrame method.
-- `concat(bdfs, *, how="vertical")`: stacks BimDataFrames like `pl.concat`, every row keeping
-  its CRS (`how` is `"vertical"`, `"diagonal"` or their `_relaxed` variants).
+- `concat(bdfs, *, how="vertical")`: stacks BimDataFrames (or polars frames with `bim_crs`)
+  like `pl.concat`, every row keeping its CRS (`how` is `"vertical"`, `"diagonal"` or their
+  `_relaxed` variants).
 - `read_parquet(source)`: reads a `BimDataFrame` back, CRS included: it is the `bim_crs`
   column. The `bimpolars` key of the Parquet file metadata holds the layout version,
   `{"version": 2}`; a file of version 1, which kept the CRS there, gets the column on read.
