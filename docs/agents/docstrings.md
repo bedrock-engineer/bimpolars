@@ -5,10 +5,10 @@ marimo parses a docstring with an `Args:`, `Returns:`, `Raises:` or `Examples:` 
 its own small Google-style parser into Markdown tables, and renders any other docstring as
 reStructuredText. `tests/test_docstrings.py` checks the shape below on every docstring.
 
-- Inline code goes in double backticks, ``` ``name`` ```, which is code in Markdown and in
+- Inline code goes in double backticks, ` ``name`` `, which is code in Markdown and in
   reStructuredText alike. Another function or constant is named the same way:
-  ``` ``bimpolars.set_crs`` ```, ``` ``CRS_COLUMN`` ```. A space or punctuation follows the
-  closing backticks (``` ``mesh`` columns ```, not a plural glued on). A link is the bare URL
+  ` ``bimpolars.set_crs`` `, ` ``CRS_COLUMN`` `. A space or punctuation follows the
+  closing backticks (` ``mesh`` columns ```, not a plural glued on). A link is the bare URL
   in brackets.
 - `Args:` and `Attributes:` entries carry the type: `name (type): description`. marimo fills
   an empty type cell from the signature for plain functions only, and an empty cell next to a
@@ -20,7 +20,7 @@ reStructuredText. `tests/test_docstrings.py` checks the shape below on every doc
   exception is listed once per condition, and the reasoning goes into the description.
 - A class documents its constructor in the class docstring, `Args:` and `Raises:` beside
   `Attributes:`, and `__init__` has no docstring.
-- A `|` in an `Args:`, `Attributes:` or `Returns:` description stays inside ``` ``code`` ```,
+- A `|` in an `Args:`, `Attributes:` or `Returns:` description stays inside ` ``code`` `,
   as a bare one splits marimo's table.
 
 A class docstring with only `Attributes:` (the NamedTuples) still renders as
