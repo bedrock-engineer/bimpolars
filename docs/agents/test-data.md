@@ -62,8 +62,13 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   44,452 objects in four versions, each version's root first: arch `d5e5bacdde` 13,194
   objects, str `b66058b4d1` 5355, mep `4413abe507` 16,173, and `5cb009bb77`,
   `rvt-advanced-sample-arch.ifc` received by Speckle's IFC importer, 9730 objects in metres;
-  all built from the bundles by specklepy 2026.9.1 (`v3_route` "projected", specklepy's word),
-  so that an element whose definition is empty carries its own geometry) and the bundles
+  all built from the bundles by specklepy 2026.9.1, so that an element whose definition is
+  empty carries its own geometry). A row is one object (`object_id`, `is_root`, `content`)
+  with its version's `server`, `project_id`, `model_id`, `model_name`, `version_id` and
+  `v3_route`: `"server"` when the server had the v3 objects, `"bundle"` when they were built
+  from the bundle. The file on R2 still says `"projected"` (specklepy's word) until the RVT
+  notebook in bedrock-experiments pushes it again; `version_objects` never reads `v3_route`,
+  so either loads. Next to it are the bundles
   `rvt-advanced-sample/speckle-bundle/<model id>/<version id>/<name>.<table>.parquet`
   (`data.RVT_SPECKLE_ARCH/STR/MEP`, 18 tables each, and `data.RVT_SPECKLE_IFC`, 15: no
   `REVIT_TABLES`; `data.fetch_bundle`); `bundle_objects`
