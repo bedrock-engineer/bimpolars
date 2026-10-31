@@ -26,7 +26,7 @@ them as they are; shapely decodes them. Meshes stay nested columns.
 
 A geometry column that is listed in `geoparquet.GEOMETRY_COLUMNS` (`geog`, `footprint`,
 `lightbim`) gets `geo` metadata on write, the first present one as the primary. `bbox` is the
-covering of the columns in the model CRS: the `geo` entry points readers at the column's x and
+covering of the columns in the BIM CRS: the `geo` entry points readers at the column's x and
 y fields, which every footprint lies within, so that a spatial filter can skip row groups. A
 GeoParquet covering has no z slot, and the column's `zmin..zmax` is the mesh's, which a
 footprint flat at its storey's elevation often lies outside of; the column keeps all six.

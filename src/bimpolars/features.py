@@ -3,7 +3,7 @@
 A :class:`~bimpolars.BimDataFrame` fresh from a reader has its geometry as meshes. The GIS side
 of a project wants each element as a simple feature: here its footprint, the outline of the
 mesh in plan, placed flat at the level of the storey the element belongs to. The footprint is a
-``POLYGON Z`` or ``MULTIPOLYGON Z`` in the model CRS, stored as ISO WKB in a Binary column so
+``POLYGON Z`` or ``MULTIPOLYGON Z`` in the BIM CRS, stored as ISO WKB in a Binary column so
 that the frame writes as GeoParquet (see :mod:`bimpolars.geoparquet`).
 """
 
@@ -41,7 +41,7 @@ def simple_features(
     Two columns are added (or replaced):
 
     - ``footprint``: the mesh's outline in plan as ``POLYGON Z`` or ``MULTIPOLYGON Z`` in the
-      model CRS, encoded as ISO WKB (:data:`FOOTPRINT_DTYPE`). It is the union of the mesh's
+      BIM CRS, encoded as ISO WKB (:data:`FOOTPRINT_DTYPE`). It is the union of the mesh's
       triangles projected to the XY plane, so holes and separate parts survive, lying flat at
       the elevation of the ``footprint_ref`` row. A mesh whose triangles are all vertical has
       no plan area and gets ``POLYGON Z EMPTY``; a row without a mesh gets null. Every mesh
@@ -101,8 +101,8 @@ def simple_features(
         # Imported here: bimpolars.lightbim builds on plan_outline below
         from bimpolars.lightbim import lightbim_features
 
-        frame = frame.with_columns(lightbim_features(bdf.with_frame(frame), kind=kind))
-    return bdf.with_frame(frame)
+        frame = frame.with_columns(lightbim_features(BimDataFrame(frame), kind=kind))
+    return BimDataFrame(frame)
 
 
 def _footprint_ref(frame: pl.DataFrame) -> pl.DataFrame:

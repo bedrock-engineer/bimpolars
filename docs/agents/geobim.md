@@ -1,9 +1,20 @@
 # Georeferencing: CRSs, PROJ, to_crs and geog
 
-`src/bimpolars/geobim.py` georeferences a model: `site_crs`, `set_crs`, `to_crs`,
+`src/bimpolars/geobim.py` georeferences a model: `georeferenced_bim_crs`, `set_crs`, `to_crs`,
 `with_geog`, `affine_transformation` and `linearized_site_to_ecef`, all exported at the top
 level too. pyproj is a core dependency: every CRS argument goes through `crs.resolve_crs`, and
-a model stores its CRS as PROJJSON (`src/bimpolars/crs.py`).
+a model stores its CRS as PROJJSON text in `bim_crs` ([frame.md](frame.md)).
+
+## CRSs
+
+- A model's BIM CRS is a plain engineering CRS fresh from a reader (`engineering_crs`), or a
+  georeferenced BIM CRS from `georeferenced_bim_crs` (named `f"{name} georeferenced BIM
+  CRS"`; files written before #42 say `"{name} site CRS"`, which is only a label). The
+  compound CRS (EPSG:7415) is a parameter of it, not a column. "Site" is left for the site
+  origin.
+- `set_crs` rewrites `bim_crs` and no coordinate, also on a mixed frame. `to_crs` and
+  `with_geog` read `bdf.crs`, so a frame with several CRSs raises before PROJ runs: one
+  transformer for rows that start in different CRSs would misplace some of them.
 
 ## to_crs
 
@@ -46,7 +57,7 @@ a model stores its CRS as PROJJSON (`src/bimpolars/crs.py`).
 - `to_crs` never moves it: `geoparquet.COLUMN_CRS` lists the columns with a CRS of their own,
   and `geobim.WKB_COLUMNS` leaves them out.
 - Its `geo` entry has `CRS84H` as the CRS, the bounds of its own coordinates as the file `bbox`
-  (decoded with shapely on write) and no covering, since `bbox` is in the model CRS; geopandas's
+  (decoded with shapely on write) and no covering, since `bbox` is in the BIM CRS; geopandas's
   `bbox=` filter then refuses the file (it needs a covering on the primary column).
 - pyogrio writes a CRS as WKT1, which cannot say a 3D geographic CRS, so
   `GeoDataFrame.to_file` on a `geog` frame needs `set_crs("OGC:CRS84", allow_override=True)`

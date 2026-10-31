@@ -3,15 +3,15 @@
 A Parquet file is `GeoParquet <https://geoparquet.org>`_ when its file metadata has a ``geo``
 key that names the geometry columns, their encoding and their CRS. :func:`geo_metadata` builds
 that entry for a frame with a WKB geometry column from :data:`GEOMETRY_COLUMNS`, each with its
-CRS as PROJJSON (the model CRS, except for the columns of :data:`COLUMN_CRS`: ``geog`` is
+CRS as PROJJSON (the BIM CRS, except for the columns of :data:`COLUMN_CRS`: ``geog`` is
 always OGC:CRS84h), so that DuckDB spatial, geopandas and GDAL read the frame with its CRS.
 When the frame has its ``bbox`` column, the entry also names it as the *covering* of each
-column in the model CRS: a pointer that tells a reader that each row's geometry lies within
+column in the BIM CRS: a pointer that tells a reader that each row's geometry lies within
 ``bbox.xmin..xmax`` and ``bbox.ymin..ymax``, so that a spatial filter can skip row groups. A
 GeoParquet covering has those four slots and no z; the column itself keeps all six fields.
 ``geog`` is in longitude and latitude, which ``bbox`` does not cover, so its entry gets the
 bounds of its own coordinates and no covering. The ``mesh`` and ``native_geom`` columns share
-the model CRS implicitly: they are not GeoParquet geometries.
+the BIM CRS of the ``bim_crs`` column: they are not GeoParquet geometries.
 """
 
 from __future__ import annotations
@@ -39,16 +39,16 @@ GEOMETRY_COLUMNS: tuple[str, ...] = (GEOG_COLUMN, "footprint", "lightbim")
 """The WKB geometry columns a BimDataFrame can hold; the first one present is the primary.
 
 ``geog`` (the footprints in OGC:CRS84h, from :func:`bimpolars.geobim.with_geog`) comes before
-``footprint`` (in the model CRS, from :func:`bimpolars.simple_features`): a reader that takes
+``footprint`` (in the BIM CRS, from :func:`bimpolars.simple_features`): a reader that takes
 the primary column then has longitude and latitude, which export to GeoJSON as they are.
-``lightbim`` (in the model CRS, the structural-analysis reduction of
+``lightbim`` (in the BIM CRS, the structural-analysis reduction of
 :func:`bimpolars.simple_features` with ``lightbim=True``) comes last.
 """
 
 COLUMN_CRS: dict[str, dict[str, Any]] = {GEOG_COLUMN: CRS84H}
-"""The CRS of the geometry columns that are not in the model CRS, as PROJJSON.
+"""The CRS of the geometry columns that are not in the BIM CRS, as PROJJSON.
 
-``geog`` is always OGC:CRS84h (:data:`bimpolars.crs.CRS84H`), whatever the model CRS is, so
+``geog`` is always OGC:CRS84h (:data:`bimpolars.crs.CRS84H`), whatever the BIM CRS is, so
 :func:`bimpolars.geobim.to_crs` never moves it.
 """
 
@@ -76,9 +76,9 @@ def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any]) -> dict[str, Any] 
     """Builds the GeoParquet ``geo`` metadata of a frame.
 
     Every column of :data:`GEOMETRY_COLUMNS` the frame has is listed with ``encoding`` WKB,
-    the geometry types found in its values and its CRS as PROJJSON: the model CRS, or the
+    the geometry types found in its values and its CRS as PROJJSON: the BIM CRS, or the
     column's own from :data:`COLUMN_CRS` (``geog`` is in OGC:CRS84h). When the frame has a
-    :data:`BBOX_COLUMN` Struct, each column in the model CRS also gets that column as its
+    :data:`BBOX_COLUMN` Struct, each column in the BIM CRS also gets that column as its
     ``covering`` (the x and y fields: a GeoParquet covering has no z slot) and a ``bbox`` of
     the whole file. That file ``bbox`` is x and y only as well, on purpose: a footprint lies
     flat at its storey's elevation, which is often outside the mesh's ``zmin..zmax`` that the
@@ -88,7 +88,7 @@ def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any]) -> dict[str, Any] 
 
     Args:
         frame: The frame about to be written.
-        crs: The model CRS as PROJJSON.
+        crs: The BIM CRS as PROJJSON.
 
     Returns:
         The metadata as a JSON-ready dict, or None when the frame has no geometry column.

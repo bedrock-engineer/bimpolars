@@ -21,6 +21,7 @@ from bimpolars import (
     BimDataFrame,
     element_meshes_glb,
     engineering_crs,
+    set_crs,
     triangles_glb,
 )
 from bimpolars.crs import as_linear_unit
@@ -228,7 +229,7 @@ def test_scene_is_in_metres_and_y_up(styled_model: BimDataFrame) -> None:
 def test_a_model_in_metres_is_not_scaled() -> None:
     slab = {"id": "slab", "class": "IfcSlab", "mesh": box(0, 0, 0, 10, 20, 0.3)}
     bdf = model([slab])
-    bdf = BimDataFrame(bdf.frame, engineering_crs("Metric", unit="metre"))
+    bdf = set_crs(bdf, engineering_crs("Metric", unit="metre"))
     scene = load(element_meshes_glb(bdf))
     assert scene.bounds[1] - scene.bounds[0] == pytest.approx([10, 0.3, 20], abs=1e-6)
 

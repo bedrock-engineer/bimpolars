@@ -1,11 +1,35 @@
 # The frame: rows and columns
 
 A `BimDataFrame` (`src/bimpolars/frame.py`) is a polars DataFrame with one row per element and
-one model CRS, stored as PROJJSON (`bdf.projjson`, `src/bimpolars/crs.py`) and read as a
-`pyproj.CRS` (`bdf.crs`). The readers fill the columns in
-`MODEL_COLUMNS`; `simple_features` adds the `FEATURE_COLUMNS` ([features.md](features.md)),
-`lightbim=True` the `LIGHTBIM_COLUMNS` ([lightbim.md](lightbim.md)) and `geobim.with_geog` the
-`geog` column ([geobim.md](geobim.md)).
+the BIM CRS of each row in its `bim_crs` column, parsed as PROJJSON (`bdf.projjson`) and as a
+`pyproj.CRS` (`bdf.crs`). The readers fill the columns in `MODEL_COLUMNS`, `bim_crs` last;
+`simple_features` adds the `FEATURE_COLUMNS` ([features.md](features.md)), `lightbim=True`
+the `LIGHTBIM_COLUMNS` ([lightbim.md](lightbim.md)) and `geobim.with_geog` the `geog` column
+([geobim.md](geobim.md)).
+
+## The bim_crs column
+
+- `bim_crs` (`frame.CRS_COLUMN`) is the one place the CRS lives (#42): the wrapper keeps none.
+  It holds compact PROJJSON text (`frame.crs_text`) and covers `mesh`, `bbox`, `native_geom`,
+  `elevation`, `footprint` and `lightbim`, never `geog` (OGC:CRS84h).
+- Its dtype is `pl.Categorical` (`frame.CRS_DTYPE`); the constructor casts a String column.
+  A String column read back from Parquet holds a copy per row: 428 MB for 200,000 rows of
+  EPSG:7415's 2.2 kB PROJJSON, against 2.3 MB as a Categorical, and its `unique()` is about
+  25 times slower.
+- `bdf.projjson` and `bdf.crs` parse the column's one value and cache it on the wrapper. They
+  raise a ValueError that names the CRSs when the column holds several, has nulls, or the
+  frame has no rows (a filter that matches nothing). Code that needs the CRS reads them, and
+  so refuses a mixed frame; code that only carries rows (`simple_features`) does not.
+- Code that builds a frame keeps `bim_crs` and wraps it with `BimDataFrame(frame)`;
+  `geobim._with_crs` puts one CRS on every row (`set_crs`, `to_crs`). `concat` stacks models
+  and keeps each row's CRS.
+- `__getattr__` and `__getitem__` hand polars through and wrap a DataFrame result that kept
+  `bim_crs`; `__arrow_c_stream__` serves `pl.DataFrame(bdf)`, pyarrow and DuckDB.
+  `mo.ui.table(bdf)` still fails: marimo picks a table by `isinstance` or narwhals, and
+  neither reads the Arrow stream, so pass `bdf.frame` there. A cell whose output is `bdf`
+  shows `_display_`: the CRS name above a table without `bim_crs`.
+- Parquet layout 2: the `bimpolars` metadata entry is `{"version": 2}` and the CRS is in the
+  column; a file of layout 1 (`{"version": 1, "crs": ...}`) gets the column on read.
 
 ## Rows
 

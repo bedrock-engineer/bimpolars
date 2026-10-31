@@ -40,7 +40,7 @@ EXCLUDED_CLASSES: tuple[str, ...] = ("IfcOpeningElement",)
 """The classes :func:`element_meshes_glb` leaves out: an opening's mesh is the void it cuts."""
 
 UNIT = "metre"
-"""The length unit of the vertex data, whatever the model CRS's unit: glTF's metre."""
+"""The length unit of the vertex data, whatever the BIM CRS's unit: glTF's metre."""
 
 _FLOAT = 5126
 """The accessor ``componentType`` of float32."""

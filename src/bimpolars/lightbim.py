@@ -6,7 +6,7 @@ plane it bears on, anything else to its footprint at the height of its centre of
 :func:`bimpolars.simple_features` with ``lightbim=True`` adds that reduction next to the
 footprint, in the three columns of :data:`LIGHTBIM_COLUMNS`:
 
-- ``lightbim``: the reduction as ISO WKB with Z in the model CRS (:data:`LIGHTBIM_DTYPE`): a
+- ``lightbim``: the reduction as ISO WKB with Z in the BIM CRS (:data:`LIGHTBIM_DTYPE`): a
   ``LINESTRING Z`` for a curve member, a ``POLYGON Z`` or ``MULTIPOLYGON Z`` for the others.
 - ``lightbim_kind`` (:data:`KIND_DTYPE`): ``member`` (curve, surface, support or mass, which
   sets the geometry), ``role`` (beam, column, brace, pile, slab, wall, plate, roof, footing,
