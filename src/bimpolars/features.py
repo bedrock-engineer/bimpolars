@@ -24,7 +24,7 @@ FOOTPRINT_DTYPE = pl.Binary
 """The dtype of the ``footprint`` column: ISO WKB with Z coordinates."""
 
 FEATURE_COLUMNS: tuple[str, ...] = ("footprint_ref", "footprint")
-"""The columns :func:`simple_features` adds, in order."""
+"""The columns ``simple_features`` adds, in order."""
 
 _REQUIRED_COLUMNS = ("id", "container", "elevation", "mesh", "bbox")
 

@@ -33,23 +33,23 @@ GEOPARQUET_VERSION = "1.1.0"
 """The GeoParquet specification version the metadata follows."""
 
 GEOG_COLUMN = "geog"
-"""The column of :func:`bimpolars.geobim.with_geog`: the footprints in OGC:CRS84h."""
+"""The column of ``bimpolars.geobim.with_geog``: the footprints in OGC:CRS84h."""
 
 GEOMETRY_COLUMNS: tuple[str, ...] = (GEOG_COLUMN, "footprint", "lightbim")
 """The WKB geometry columns a BimDataFrame can hold; the first one present is the primary.
 
-``geog`` (the footprints in OGC:CRS84h, from :func:`bimpolars.geobim.with_geog`) comes before
-``footprint`` (in the BIM CRS, from :func:`bimpolars.simple_features`): a reader that takes
+``geog`` (the footprints in OGC:CRS84h, from ``bimpolars.geobim.with_geog``) comes before
+``footprint`` (in the BIM CRS, from ``bimpolars.simple_features``): a reader that takes
 the primary column then has longitude and latitude, which export to GeoJSON as they are.
 ``lightbim`` (in the BIM CRS, the structural-analysis reduction of
-:func:`bimpolars.simple_features` with ``lightbim=True``) comes last.
+``bimpolars.simple_features`` with ``lightbim=True``) comes last.
 """
 
 COLUMN_CRS: dict[str, dict[str, Any]] = {GEOG_COLUMN: CRS84H}
 """The CRS of the geometry columns that are not in the BIM CRS, as PROJJSON.
 
-``geog`` is always OGC:CRS84h (:data:`bimpolars.crs.CRS84H`), whatever the BIM CRS is, so
-:func:`bimpolars.geobim.to_crs` never moves it.
+``geog`` is always OGC:CRS84h (``bimpolars.crs.CRS84H``), whatever the BIM CRS is, so
+``bimpolars.geobim.to_crs`` never moves it.
 """
 
 BBOX_COLUMN = "bbox"

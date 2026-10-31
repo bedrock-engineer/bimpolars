@@ -26,7 +26,7 @@ CRS_COLUMN = "bim_crs"
 """The column that holds the BIM CRS of every row, as PROJJSON text."""
 
 CRS_DTYPE = pl.Categorical
-"""The dtype of :data:`CRS_COLUMN`.
+"""The dtype of ``CRS_COLUMN``.
 
 A Categorical keeps one copy of each CRS however many rows share it, in memory and in Parquet
 (a dictionary page), also after a file is read back, where a String column holds a copy per row.
@@ -36,10 +36,10 @@ METADATA_KEY = "bimpolars"
 """The Parquet file metadata key under which a BimDataFrame stores its layout version."""
 
 METADATA_VERSION = 2
-"""The layout version of the JSON under :data:`METADATA_KEY`.
+"""The layout version of the JSON under ``METADATA_KEY``.
 
-Version 2 keeps the CRS in :data:`CRS_COLUMN`; version 1 kept it in the metadata, as
-``{"version": 1, "crs": <PROJJSON>}``, and :func:`read_parquet` still reads it.
+Version 2 keeps the CRS in ``CRS_COLUMN``; version 1 kept it in the metadata, as
+``{"version": 1, "crs": <PROJJSON>}``, and ``read_parquet`` still reads it.
 """
 
 STYLE_DTYPE = pl.Struct(
@@ -93,7 +93,7 @@ XY plane as a 2D ISO WKB Polygon (the profile's own position applied, voids as h
 ``direction`` (a unit vector in the sweep's coordinates) are the extrusion. ``clipped`` is
 True when the source cut the solid afterwards (a difference or intersection reduced to its
 first operand), so that the sweep is bigger than the element; a union lists both operands.
-The profile and the depth are in the sweep's own coordinates: :func:`bimpolars.geobim.to_crs`
+The profile and the depth are in the sweep's own coordinates: ``bimpolars.geobim.to_crs``
 moves a sweep by composing its affine matrix onto ``placement``, scale included.
 """
 
@@ -119,7 +119,7 @@ _WKT_LENGTH = 60
 """How many characters of a geometry's WKT a display shows."""
 
 ConcatMethod = Literal["vertical", "vertical_relaxed", "diagonal", "diagonal_relaxed"]
-"""The ``how`` of :func:`concat`: the polars concat strategies that stack rows."""
+"""The ``how`` of ``concat``: the polars concat strategies that stack rows."""
 
 
 class BimDataFrame:
@@ -347,7 +347,7 @@ class BimDataFrame:
             BimDataFrame: A BimDataFrame of ``frame``.
 
         Raises:
-            ValueError: If ``frame`` lacks ``bim_crs`` and this model does not have one CRS.
+            ValueError: If ``frame`` lacks ``bim_crs`` and this model has no single CRS.
         """
         if CRS_COLUMN in frame.columns:
             return BimDataFrame(frame)
@@ -394,7 +394,7 @@ class BimDataFrame:
                 column.
 
         Raises:
-            ValueError: If the frame has rows, ``footprint`` or ``lightbim``, and not one CRS.
+            ValueError: If the frame has rows, ``footprint`` or ``lightbim``, and no single CRS.
         """
         metadata = dict(kwargs.pop("metadata", None) or {})
         metadata[METADATA_KEY] = json.dumps({"version": METADATA_VERSION})

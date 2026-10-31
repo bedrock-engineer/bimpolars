@@ -52,18 +52,18 @@ from bimpolars.lightbim import QA_DTYPE
 WKB_COLUMNS: tuple[str, ...] = tuple(
     column for column in GEOMETRY_COLUMNS if column not in COLUMN_CRS
 )
-"""The WKB columns in the BIM CRS that :func:`to_crs` moves, when present.
+"""The WKB columns in the BIM CRS that ``to_crs`` moves, when present.
 
-They are the :data:`bimpolars.geoparquet.GEOMETRY_COLUMNS` without the columns in a CRS of
-their own (:data:`bimpolars.geoparquet.COLUMN_CRS`): ``geog``, the footprints in OGC:CRS84h
-of :func:`with_geog`, never changes CRS.
+They are the ``bimpolars.geoparquet.GEOMETRY_COLUMNS`` without the columns in a CRS of
+their own (``bimpolars.geoparquet.COLUMN_CRS``): ``geog``, the footprints in OGC:CRS84h
+of ``with_geog``, never changes CRS.
 """
 
 AFFINE_TOLERANCE = 1e-6
 """How far, in metres, a transformation may stray from an affine fit and still be affine."""
 
 _PROBE_HALF_SIZE = 500.0
-"""The least half size, in metres, of the cube the affine fit of :func:`to_crs` probes."""
+"""The least half size, in metres, of the cube the affine fit of ``to_crs`` probes."""
 
 _PROBE_HALF_SIZE_DEGREES = 0.01
 """The same, in degrees, for a model stored in a geographic CRS: about a kilometre."""

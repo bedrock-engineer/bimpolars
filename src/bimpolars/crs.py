@@ -100,7 +100,7 @@ CRS84H: dict[str, Any] = {
 }
 """OGC:CRS84h as PROJJSON: longitude, latitude (degrees) and ellipsoidal height (metres) on WGS 84.
 
-The CRS of the ``geog`` column that :func:`bimpolars.geobim.with_geog` adds, and what GeoJSON
+The CRS of the ``geog`` column that ``bimpolars.geobim.with_geog`` adds, and what GeoJSON
 means by its coordinates (RFC 7946: longitude, latitude and an elevation in metres above the
 WGS 84 ellipsoid). It is written out here, as ``pyproj.CRS("OGC:CRS84h").to_json_dict()`` gives
 it (PROJ 9.8), so that the metadata bimpolars writes does not change with the installed PROJ.

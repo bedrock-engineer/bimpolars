@@ -37,7 +37,7 @@ type SpeckleObject = dict[str, Any]
 
 type Bundle = str | os.PathLike[str] | Mapping[str, pl.DataFrame]
 """A Speckle bundle: the folder holding its ``<name>.<table>.parquet`` files, the URL of its
-key prefix in the bimpolars bucket (:func:`bundle_folder`), or the tables themselves by name
+key prefix in the bimpolars bucket (``bundle_folder``), or the tables themselves by name
 (``"eav.eav"``, ``"envelope.nodes"``, ...)."""
 
 SPECKLE_UNITS: dict[str, LinearUnit] = {
@@ -53,7 +53,7 @@ SPECKLE_UNITS: dict[str, LinearUnit] = {
 """The length units Speckle objects name in their ``units`` field."""
 
 LEVEL_CLASS = "Levels"
-"""The ``class`` of the rows :func:`read_speckle` adds for a bundle's levels."""
+"""The ``class`` of the rows ``read_speckle`` adds for a bundle's levels."""
 
 LEVEL_ID_PREFIX = "level-"
 """Level rows have the ``id`` ``level-<node id>``, the node id from the bundle's envelope."""

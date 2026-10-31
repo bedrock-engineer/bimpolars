@@ -55,12 +55,12 @@ MATERIAL_PREFIX = "mat-"
 """The applicationId of a material's RenderMaterialProxy: the envelope's node id after it."""
 
 FIRST_PLACEMENT_SUFFIX = "-instance-0"
-"""What :func:`bundle_objects` appends to the applicationId of an element's first placement
+"""What ``bundle_objects`` appends to the applicationId of an element's first placement
 when the element keeps geometry of its own under the plain applicationId."""
 
 _JSON_PIPELINE_DEPRECATION = r".*JSON based send/receive pipelines are deprecated"
 """The text of the DeprecationWarning of specklepy's JSON pipeline (``MemoryTransport``,
-``BaseObjectSerializer``), which :func:`bundle_objects` uses on purpose."""
+``BaseObjectSerializer``), which ``bundle_objects`` uses on purpose."""
 
 _PLACEMENT = re.compile(r"^(?P<base>.+)-instance-\d+$")
 """A placement after the first: the element's applicationId plus ``-instance-N``."""

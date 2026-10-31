@@ -37,7 +37,7 @@ model matrix.
 """
 
 EXCLUDED_CLASSES: tuple[str, ...] = ("IfcOpeningElement",)
-"""The classes :func:`element_meshes_glb` leaves out: an opening's mesh is the void it cuts."""
+"""The classes ``element_meshes_glb`` leaves out: an opening's mesh is the void it cuts."""
 
 UNIT = "metre"
 """The length unit of the vertex data, whatever the BIM CRS's unit: glTF's metre."""

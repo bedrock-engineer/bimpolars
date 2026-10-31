@@ -41,7 +41,7 @@ RVT_ADVANCED_SAMPLE_ARCH = "rvt-advanced-sample-arch.ifc"
 RVT_SPECKLE_V3_OBJECTS = "rvt-advanced-sample/speckle-v3-objects.parquet"
 """The v3 objects of the Revit Advanced Sample versions on app.speckle.systems, one row per
 object (``version_id``, ``object_id``, ``is_root``, ``content``), as
-:func:`bimpolars.speckle.version_objects` reads them: the four versions below, each built
+``bimpolars.speckle.version_objects`` reads them: the four versions below, each built
 from its bundle by specklepy (``Model.to_base()``)."""
 
 BUNDLE_TABLES: tuple[str, ...] = (
@@ -65,10 +65,10 @@ BUNDLE_TABLES: tuple[str, ...] = (
     "geometries",
 )
 """The tables of a Revit bundle (rvextract schema 1.5), each a ``<name>.<table>.parquet`` file,
-which :func:`fetch_bundle` fetches. A bundle of an IFC file lacks the :data:`REVIT_TABLES`.
+which ``fetch_bundle`` fetches. A bundle of an IFC file lacks the ``REVIT_TABLES``.
 
 A bundle with more than 1.5 GiB of uncompressed geometry has overflow shards,
-``<name>.geometries.<N>.parquet``, which this list does not name and :func:`fetch_bundle`
+``<name>.geometries.<N>.parquet``, which this list does not name and ``fetch_bundle``
 does not fetch: the elements whose geometry is in them would have no mesh. The RVT samples
 have one shard each. Read such a bundle from a complete folder instead."""
 
@@ -77,7 +77,7 @@ REVIT_TABLES: tuple[str, ...] = (
     "eav.revit_views",
     "eav.revit_warnings",
 )
-"""The tables of :data:`BUNDLE_TABLES` that only a Revit bundle has."""
+"""The tables of ``BUNDLE_TABLES`` that only a Revit bundle has."""
 
 
 class SpeckleVersion(NamedTuple):
@@ -116,8 +116,8 @@ RVT_SPECKLE_MEP = SpeckleVersion(
 RVT_SPECKLE_IFC = SpeckleVersion(
     "e7f5f7f943", "5cb009bb77", f"{_RVT_BUNDLES}/e7f5f7f943/5cb009bb77/rvt-advanced-sample-arch"
 )
-""":data:`RVT_ADVANCED_SAMPLE_ARCH` received by Speckle's IFC importer: 9730 v3 objects in
-metres, 5569 bundle objects on 5 levels; the bundle (ifc schema 1.2) has no :data:`REVIT_TABLES`."""
+"""``RVT_ADVANCED_SAMPLE_ARCH`` received by Speckle's IFC importer: 9730 v3 objects in
+metres, 5569 bundle objects on 5 levels; the bundle (ifc schema 1.2) has no ``REVIT_TABLES``."""
 
 
 def data_dir() -> Path:
@@ -125,7 +125,7 @@ def data_dir() -> Path:
 
     Returns:
         Path: The folder named by ``DATA_DIR_ENV``, or ``bimpolars`` under the user's cache
-        folder when the variable is not set: ``$XDG_CACHE_HOME`` if set, else ``~/.cache``.
+        folder when the variable is not set (``$XDG_CACHE_HOME`` if set, else ``~/.cache``).
     """
     configured = os.environ.get(DATA_DIR_ENV)
     if configured:

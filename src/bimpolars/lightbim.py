@@ -76,7 +76,7 @@ LIGHTBIM_DTYPE = pl.Binary
 """The dtype of ``lightbim``: ISO WKB with Z coordinates."""
 
 LIGHTBIM_COLUMNS: tuple[str, ...] = ("lightbim", "lightbim_kind", "lightbim_qa")
-"""The columns :func:`lightbim_features` adds, in order."""
+"""The columns ``lightbim_features`` adds, in order."""
 
 SLENDERNESS = 4.0
 """The ratio between two extents of the box around a mesh that makes it a plate or a line."""
@@ -168,7 +168,7 @@ reinforcement, connections and stiffeners, which an analysis model carries in it
 its rows get null LightBIM columns. A ``support`` from this table whose shape is a vertical
 line (a pile exported as a footing) becomes a ``curve`` with the role ``pile``; a support the
 ``kind`` expression gives stays one. Edit the dict, or pass ``kind`` to
-:func:`lightbim_features`, to change the table.
+``lightbim_features``, to change the table.
 """
 
 

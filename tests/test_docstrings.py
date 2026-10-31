@@ -27,16 +27,24 @@ RAISES_ENTRY = re.compile(r"^[\w.]+: \S")
 
 def _docstrings() -> Iterator[tuple[str, str, str]]:
     for path in sorted(PACKAGE.rglob("*.py")):
+        where = path.relative_to(PACKAGE.parent)
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef):
                 docstring = ast.get_docstring(node, clean=False)
                 if docstring is not None:
                     name = getattr(node, "name", "module")
-                    yield (
-                        f"{path.relative_to(PACKAGE.parent)}:{node.body[0].lineno}",
-                        name,
-                        docstring,
-                    )
+                    yield f"{where}:{node.body[0].lineno}", name, docstring
+            if isinstance(node, ast.Module | ast.ClassDef):
+                # A string right after an assignment documents that constant or attribute;
+                # jedi hands it to marimo's panel as well.
+                for before, statement in zip(node.body, node.body[1:], strict=False):
+                    if (
+                        isinstance(before, ast.Assign | ast.AnnAssign | ast.TypeAlias)
+                        and isinstance(statement, ast.Expr)
+                        and isinstance(statement.value, ast.Constant)
+                        and isinstance(statement.value.value, str)
+                    ):
+                        yield f"{where}:{statement.lineno}", "attribute", statement.value.value
 
 
 def _problems(name: str, docstring: str) -> Iterator[str]:
@@ -77,6 +85,8 @@ def _problems(name: str, docstring: str) -> Iterator[str]:
                 description = text[typed.end() :]
             else:
                 yield f"Returns without `Type: description` on its first line: {text}"
+        if section == "Returns" and entries > 0 and ":" in text:
+            yield f"a colon on a later Returns line starts a new row in marimo: {text}"
         if section in {"Args", "Attributes", "Returns"} and "|" in LITERAL.sub("", description):
             yield f"a | outside ``code`` splits marimo's table: {text}"
         if section == "Raises" and not (is_entry and RAISES_ENTRY.match(text)):
