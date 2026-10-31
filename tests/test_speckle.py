@@ -208,8 +208,8 @@ def test_own_geometry_and_placements(
     str_objects: list[dict],
     mep_objects: list[dict],
 ) -> None:
-    """specklepy's projection puts an element's geometry on the element itself when its
-    definition is empty (the 841 str elements an older projection left without a mesh), and
+    """specklepy's to_base puts an element's geometry on the element itself when its
+    definition is empty (the 841 str elements an older build left without a mesh), and
     for eight parapet walls keeps both: the wall body on the element and its cap, a wall
     sweep, in a placed definition. Nothing is counted twice: without the placements the 841
     rows keep every face, and each parapet wall loses exactly the cap's 76."""
@@ -309,7 +309,7 @@ def test_properties(arch: BimDataFrame, arch_bare: BimDataFrame) -> None:
     assert len(psets) == 102
     assert sum(len(pset.to_schema()) for pset in psets.values()) == 656
     assert psets[OBJECT_SET].to_schema() == {"family": pl.String, "type": pl.String}
-    # the eav gives elementId as a double (130846.0), as specklepy's projection does
+    # the eav gives elementId as a double (130846.0), as specklepy's to_base does
     assert psets["properties"].to_schema()["elementId"] == pl.Float64
     assert psets["properties"].to_schema()["builtInCategory"] == pl.String
     dimensions = psets["properties.Parameters.Instance Parameters.Dimensions"].to_schema()

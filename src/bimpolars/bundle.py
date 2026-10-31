@@ -1,12 +1,13 @@
-"""Projects a Speckle bundle to the v3 objects :func:`bimpolars.read_speckle` reads.
+"""Builds the v3 objects :func:`bimpolars.read_speckle` reads from a Speckle bundle.
 
 A Speckle version is published either as v3 objects (the JSON graph of
 :mod:`bimpolars.speckle`) or, since Speckle 4, as a *bundle*: Parquet tables for the
 properties (``eav``), the scene graph (``envelope``) and the geometry (``geometries``, SGEO
 blobs). A bundle-only version has no v3 objects on the server; specklepy's
-``Model.to_base()`` projects the bundle to the legacy object tree. :func:`bundle_objects` does
-that projection from a bundle on disk or in the bimpolars bucket, and restores two things the
-projection loses: an element that is placed as an instance keeps the geometry it carries
+``Model.to_base()`` builds the legacy object tree from the bundle (its module
+``specklepy.bundle.base_projection`` calls this a projection). :func:`bundle_objects` builds
+it from a bundle on disk or in the bimpolars bucket, and restores two things ``to_base``
+loses: an element that is placed as an instance keeps the geometry it carries
 itself, and the geometry of an instance definition keeps its materials.
 
 This module needs specklepy: install the ``[speckle]`` extra. The core of bimpolars does not
@@ -35,12 +36,12 @@ except ImportError as error:
     ) from error
 
 try:
-    # specklepy's projection of an element's own geometry to a DataObject, and of the
+    # specklepy's builders of an element's own geometry as a DataObject, and of the
     # material nodes to RenderMaterialProxies; private, which is why the extra pins specklepy
     from specklepy.bundle.base_projection import _geometry_object, _materials
 except ImportError as error:
     raise ImportError(
-        "bimpolars.bundle needs specklepy 2026.9.1, whose bundle projection it extends: "
+        "bimpolars.bundle needs specklepy 2026.9.1, whose Model.to_base() it extends: "
         f"install the extra bimpolars[speckle] ({error})"
     ) from error
 
@@ -84,7 +85,7 @@ def bundle_model(bundle: str | os.PathLike[str]) -> Model:
     specklepy's ``receive`` downloads a version's bundle into a temporary folder and wraps it
     in a ``Model``; this does the same for a bundle that is already on disk, so that the
     model's objects, levels, materials, definitions and geometry (``model.objects``,
-    ``model.levels``, ...) can be read, or projected with :func:`bundle_objects`.
+    ``model.levels``, ...) can be read, or built into v3 objects with :func:`bundle_objects`.
 
     Args:
         bundle: The folder holding the bundle's ``<name>.<table>.parquet`` files, or the
@@ -116,7 +117,7 @@ def bundle_model(bundle: str | os.PathLike[str]) -> Model:
 
 
 def bundle_objects(bundle: str | os.PathLike[str]) -> list[SpeckleObject]:
-    """Projects a Speckle bundle to the v3 objects of its version, root first.
+    """Builds the v3 objects of a version from its Speckle bundle, root first.
 
     The objects are what specklepy's ``Model.to_base()`` builds, serialized as a Speckle
     send would (DataObjects and meshes detached, long arrays in DataChunks) and parsed again:
@@ -125,9 +126,9 @@ def bundle_objects(bundle: str | os.PathLike[str]) -> list[SpeckleObject]:
     ``instanceDefinitionProxies`` and ``renderMaterialProxies`` on the root, and the bundle's
     ``units``. The list goes straight into :func:`bimpolars.read_speckle`, with the same
     bundle for the categories, parameters and levels, and matches what
-    :func:`bimpolars.version_objects` gives for a version projected this way.
+    :func:`bimpolars.version_objects` gives for a version built this way.
 
-    Two things the plain projection loses are restored:
+    Two things the plain ``to_base`` loses are restored:
 
     - An element with instance placements keeps the geometry it carries itself. Revit puts
       structural framing, columns and foundations in model coordinates on the element and
@@ -225,7 +226,7 @@ def _add_definition_materials(model: Model, root: Collection) -> None:
         if geometry_k in owned or geometry_k not in in_definitions:
             continue
         geometry = model.geometries.get(geometry_k)
-        if geometry is not None and geometry.is_sgeo:  # the projection built an object for it
+        if geometry is not None and geometry.is_sgeo:  # to_base built an object for it
             targets.setdefault(material_k, []).append(f"{DEFINITION_GEOMETRY_PREFIX}{geometry_k}")
     if not targets:
         return
@@ -234,8 +235,8 @@ def _add_definition_materials(model: Model, root: Collection) -> None:
         for proxy in getattr(root, "renderMaterialProxies", None) or []
     }
     proxies: list[RenderMaterialProxy] = []
-    # every material node as specklepy's projection builds it, in the envelope's order; the
-    # ones the projection already attached to an element's geometry come from the root
+    # every material node as specklepy's to_base builds it, in the envelope's order; the
+    # ones to_base already attached to an element's geometry come from the root
     for node_k, fresh in _materials(bundle.nodes).items():
         proxy = existing.get(str(fresh.applicationId), fresh)
         for target in targets.get(node_k, []):

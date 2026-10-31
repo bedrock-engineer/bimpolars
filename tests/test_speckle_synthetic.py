@@ -484,7 +484,7 @@ def test_bundle_materials_for_definition_geometry(bundled: BimDataFrame) -> None
 
 
 def test_bundle_elements_without_an_object_get_rows() -> None:
-    # a curtain wall the projection left out: the bundle knows it, the version does not
+    # a curtain wall specklepy built no object for: the bundle knows it, the version does not
     tables = bundle_tables()
     tables["eav.objects"] = pl.concat(
         [tables["eav.objects"], pl.DataFrame({"object_index": [3], "application_id": ["cw1"]})]

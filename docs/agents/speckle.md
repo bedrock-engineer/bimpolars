@@ -3,8 +3,10 @@
 `src/bimpolars/speckle.py` reads a Speckle version from its v3 objects as plain JSON, without
 specklepy: `version_objects` (Parquet or SQLite copy) and `read_speckle` (instances expanded,
 the bundle's categories, parameters and levels joined by applicationId).
-`src/bimpolars/bundle.py` (the `[speckle]` extra, specklepy) projects a bundle on disk, or in
-the bucket, to those objects: `bundle_model` and `bundle_objects`.
+`src/bimpolars/bundle.py` (the `[speckle]` extra, specklepy) builds those objects from a bundle
+on disk, or in the bucket: `bundle_model` and `bundle_objects`. Say "built from the bundle",
+not "projected" (specklepy's word for `Model.to_base()`, which in bimpolars clashes with
+projected CRSs and footprints projected to XY).
 
 ## read_speckle rows
 

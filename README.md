@@ -64,8 +64,8 @@ uv add "bimpolars[speckle]"  # with specklepy, for Speckle bundles
 The core depends on polars, numpy, shapely and pyproj, so georeferencing needs no extra.
 Reading IFC (ifcopenshell) is the extra `[ifc]`: `import bimpolars` does not import
 ifcopenshell, `bimpolars.read_ifc` does on first use. Reading a Speckle version from its v3
-objects needs no specklepy; projecting a Speckle bundle to those objects does, and is the extra
-`[speckle]` (see [Speckle](#speckle)).
+objects needs no specklepy; building those objects from a Speckle bundle does, and is the
+extra `[speckle]` (see [Speckle](#speckle)).
 
 A CRS goes in in any form pyproj reads: PROJJSON, a `pyproj.CRS`, `"EPSG:7415"`, an EPSG code
 or WKT (`bimpolars.CRSLike`). A `BimDataFrame` stores it as PROJJSON (`bdf.projjson`), which
@@ -140,7 +140,7 @@ like `GeoDataFrame.crs`.
 - `version_objects(source, version)`: the v3 objects of one version, root first, from a local
   copy: a Parquet file with `version_id`, `object_id`, `is_root` and `content` columns, or a
   SQLite database with `versions(version_id, v3_root_id)` and `objects(hash, content)`.
-- `bimpolars.bundle.bundle_objects(bundle)`: the v3 objects of a bundle-only version, projected
+- `bimpolars.bundle.bundle_objects(bundle)`: the v3 objects of a bundle-only version, built
   from its bundle (a folder of `<name>.<table>.parquet` files, or the bundle's URL in the
   bimpolars bucket) with specklepy, the `[speckle]` extra; the placed elements keep the
   geometry they carry themselves and definition geometry keeps its materials.
@@ -355,7 +355,7 @@ Path("structure.glb").write_bytes(bimpolars.element_meshes_glb(structure))
 version's v3 objects: the JSON graph of a root collection, `DataObject`s with their
 `displayValue` meshes, and instances (`InstanceProxy`, `InstanceDefinitionProxy`). The objects
 come from a local copy of a Speckle download (`version_objects`), or from the version's
-*bundle*, the Parquet tables Speckle 4 publishes instead, projected with specklepy by
+*bundle*, the Parquet tables Speckle 4 publishes instead, built into objects with specklepy by
 `bimpolars.bundle.bundle_objects` (the `[speckle]` extra).
 
 ```python
@@ -380,7 +380,7 @@ from bimpolars.bundle import bundle_objects  # the [speckle] extra
 
 bundle = f"{data.DATA_URL}{arch.bundle}"  # the bundle's folder, or its URL in the bucket
 same = bimpolars.read_speckle(bundle_objects(bundle), bundle)
-same.equals(bdf)  # True: the bucket's objects were projected the same way
+same.equals(bdf)  # True: the bucket's objects were built the same way
 ```
 
 - One row per element: the objects under the root's `elements`, collections traversed, the
@@ -390,12 +390,12 @@ same.equals(bdf)  # True: the bucket's objects were projected the same way
   folds into the row of `<applicationId>`, so an element placed several times is one row with
   one merged mesh. `id` is the `applicationId` (the Revit UniqueId), `name` the object's name.
 - With a bundle, the elements the bundle knows but the version has no object for (Revit
-  elements the projection leaves out: curtain walls, room separations, MEP systems, wires and
+  elements specklepy builds no object for: curtain walls, room separations, MEP systems, wires and
   circuits) get rows too, with the bundle's category, name, properties and level and a null
   `mesh`, so that `read_speckle` and `read_ifc` both give one row per element of the model.
 - `class`: the object's `category`, else the Revit category the bundle has for it, else the
-  `speckle_type`. The bundle is where the instances get theirs: specklepy's projection gives an
-  `InstanceProxy` nothing but its transform.
+  `speckle_type`. The bundle is where the instances get theirs: specklepy's `Model.to_base()` gives
+  an `InstanceProxy` nothing but its transform.
 - `properties`: a Struct of sets, each a group of the property tree named by its dotted path:
   `properties` holds the values directly in the object's property bag (`elementId`, `typeId`),
   `properties.Parameters.Instance Parameters.Dimensions` a group's values (`Volume`), and
@@ -425,15 +425,16 @@ same.equals(bdf)  # True: the bucket's objects were projected the same way
   bundle's `modelPlacement.options.sharedCoordinates.transform`; on the RVT Advanced Sample
   the plan extents then agree to the micrometre and 85 % of the elements matched by IfcGUID
   within 1 mm.
-- `bundle_objects` projects a bundle on disk with specklepy's `Model.to_base()`, serialized as
-  a Speckle send would, and restores two things that projection loses. An element placed as
+- `bundle_objects` builds the objects from a bundle on disk with specklepy's `Model.to_base()`
+  (specklepy calls it a projection), serialized as a Speckle send would, and restores two
+  things `to_base` loses. An element placed as
   an instance keeps the geometry it carries itself: Revit puts structural framing, columns and
   foundations on the element with an empty definition (841 of the 935 elements of the
   structural sample), which `to_base` leaves without geometry; it becomes a DataObject under
   the element's id, the first placement is renamed `<id>-instance-0`, and the two fold into
   one row. And the geometry of an instance definition gets the material the envelope attaches
   to it, so family instances are coloured without the bundle at hand. The bucket's
-  `speckle-v3-objects.parquet` was projected this way, so both routes give equal frames.
+  `speckle-v3-objects.parquet` was built this way, so both routes give equal frames.
 
 ## Develop
 
