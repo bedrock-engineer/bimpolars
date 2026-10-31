@@ -1,17 +1,17 @@
-"""Builds the v3 objects :func:`bimpolars.read_speckle` reads from a Speckle bundle.
+"""Builds the v3 objects ``bimpolars.read_speckle`` reads from a Speckle bundle.
 
 A Speckle version is published either as v3 objects (the JSON graph of
-:mod:`bimpolars.speckle`) or, since Speckle 4, as a *bundle*: Parquet tables for the
+``bimpolars.speckle``) or, since Speckle 4, as a *bundle*: Parquet tables for the
 properties (``eav``), the scene graph (``envelope``) and the geometry (``geometries``, SGEO
 blobs). A bundle-only version has no v3 objects on the server; specklepy's
 ``Model.to_base()`` builds the legacy object tree from the bundle (its module
-``specklepy.bundle.base_projection`` calls this a projection). :func:`bundle_objects` builds
+``specklepy.bundle.base_projection`` calls this a projection). ``bundle_objects`` builds
 it from a bundle on disk or in the bimpolars bucket, and restores two things ``to_base``
 loses: an element that is placed as an instance keeps the geometry it carries
 itself, and the geometry of an instance definition keeps its materials.
 
 This module needs specklepy: install the ``[speckle]`` extra. The core of bimpolars does not
-import it; :func:`bimpolars.read_speckle` reads the objects this module gives as plain JSON.
+import it; ``bimpolars.read_speckle`` reads the objects this module gives as plain JSON.
 """
 
 from __future__ import annotations
@@ -85,23 +85,23 @@ def bundle_model(bundle: str | os.PathLike[str]) -> Model:
     specklepy's ``receive`` downloads a version's bundle into a temporary folder and wraps it
     in a ``Model``; this does the same for a bundle that is already on disk, so that the
     model's objects, levels, materials, definitions and geometry (``model.objects``,
-    ``model.levels``, ...) can be read, or built into v3 objects with :func:`bundle_objects`.
+    ``model.levels``, ...) can be read, or built into v3 objects with ``bundle_objects``.
 
     Args:
-        bundle: The folder holding the bundle's ``<name>.<table>.parquet`` files, or the
-            URL of the bundle's key prefix in the bimpolars bucket (``<DATA_URL><prefix>``,
-            as :func:`bimpolars.data.fetch_bundle` takes it), fetched into the data folder.
+        bundle (str | os.PathLike[str]): The folder holding the bundle's ``<name>.<table>.parquet``
+            files, or the URL of the bundle's key prefix in the bimpolars bucket
+            (``<DATA_URL><prefix>``, as ``bimpolars.data.fetch_bundle`` takes it), fetched into the
+            data folder.
 
     Returns:
-        The model, without project, model or version id. Closing it, or leaving a ``with``
+        Model: The model, without project, model or version id. Closing it, or leaving a ``with``
         block, keeps the folder, unlike a model specklepy's ``receive`` downloaded; its
         geometry stays readable from the folder afterwards.
 
     Raises:
         ValueError: If the folder does not exist, or the URL is not in the bucket.
-        FileNotFoundError: If the folder lacks a table the bundle reader requires
-            (``eav.objects``, ``eav.paths``, ``eav.eav``, ``envelope.nodes`` or
-            ``envelope.relations``).
+        FileNotFoundError: If the folder lacks ``eav.objects``, ``eav.paths`` or ``eav.eav``.
+        FileNotFoundError: If the folder lacks ``envelope.nodes`` or ``envelope.relations``.
         urllib.error.URLError: If downloading a table of a bundle named by its URL fails.
     """
     folder = bundle_folder(bundle)
@@ -121,12 +121,12 @@ def bundle_objects(bundle: str | os.PathLike[str]) -> list[SpeckleObject]:
 
     The objects are what specklepy's ``Model.to_base()`` builds, serialized as a Speckle
     send would (DataObjects and meshes detached, long arrays in DataChunks) and parsed again:
-    a root ``Collection`` with its ``__closure``, the elements as ``DataObject``s with their
+    a root ``Collection`` with its ``__closure``, the elements as ``DataObject`` objects with their
     ``displayValue`` meshes, ``InstanceProxy`` placements with their transforms, the
     ``instanceDefinitionProxies`` and ``renderMaterialProxies`` on the root, and the bundle's
-    ``units``. The list goes straight into :func:`bimpolars.read_speckle`, with the same
+    ``units``. The list goes straight into ``bimpolars.read_speckle``, with the same
     bundle for the categories, parameters and levels, and matches what
-    :func:`bimpolars.version_objects` gives for a version built this way.
+    ``bimpolars.version_objects`` gives for a version built this way.
 
     Two things the plain ``to_base`` loses are restored:
 
@@ -135,7 +135,7 @@ def bundle_objects(bundle: str | os.PathLike[str]) -> list[SpeckleObject]:
       gives them an empty instance definition, so ``to_base`` leaves them without geometry
       (841 of the 935 elements of the structural sample). Here that geometry becomes a
       DataObject under the element's applicationId, listed right before its first placement,
-      which is renamed ``<applicationId>-instance-0``; :func:`bimpolars.read_speckle` folds
+      which is renamed ``<applicationId>-instance-0``; ``bimpolars.read_speckle`` folds
       both into the element's row. An element that has both, such as a parapet wall whose
       cap is a placed sweep, keeps both.
     - The geometry of an instance definition (``def-geo-<geometry index>``) gets the material
@@ -144,16 +144,16 @@ def bundle_objects(bundle: str | os.PathLike[str]) -> list[SpeckleObject]:
       ``renderMaterialProxies`` target those ids too, in the envelope's order of materials.
 
     Args:
-        bundle: The bundle's folder, or the URL of its key prefix in the bimpolars bucket,
-            as :func:`bundle_model` takes it.
+        bundle (str | os.PathLike[str]): The bundle's folder, or the URL of its key prefix in the
+            bimpolars bucket, as ``bundle_model`` takes it.
 
     Returns:
-        The parsed objects, the root first and its closure after it.
+        list[SpeckleObject]: The parsed objects, the root first and its closure after it.
 
     Raises:
         ValueError: If the folder does not exist, or the URL is not in the bucket.
-        FileNotFoundError: If the folder lacks a table the bundle reader requires, or the
-            geometry shards.
+        FileNotFoundError: If the folder lacks a table the bundle reader requires.
+        FileNotFoundError: If the folder lacks the geometry shards.
         urllib.error.URLError: If downloading a table of a bundle named by its URL fails.
     """
     model = bundle_model(bundle)

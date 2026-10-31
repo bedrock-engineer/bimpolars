@@ -1,18 +1,18 @@
 """Building Information Models in polars DataFrames with geometry columns.
 
-A :class:`BimDataFrame` holds one BIM model: a polars DataFrame with one row per element and
+A ``BimDataFrame`` holds one BIM model: a polars DataFrame with one row per element and
 the BIM CRS of their geometry in its ``bim_crs`` column, as PROJJSON text, read as a
-``pyproj.CRS``. Polars methods work on it directly, and :func:`concat` stacks models.
-:func:`read_ifc` fills it from
-an IFC file and :func:`read_speckle` from the v3 objects of a Speckle version
-(:func:`version_objects`), :func:`simple_features` adds the plan footprint of every element,
-:func:`element_meshes_glb` writes the meshes as glTF, and :func:`read_parquet` reads a model
-back from the (Geo)Parquet that :meth:`BimDataFrame.write_parquet` wrote.
-:func:`georeferenced_bim_crs`, :func:`set_crs`, :func:`to_crs` and :func:`with_geog` (from
-:mod:`bimpolars.geobim`) georeference a model, and :mod:`bimpolars.data` fetches the test
+``pyproj.CRS``. Polars methods work on it directly, and ``concat`` stacks models.
+``read_ifc`` fills it from
+an IFC file and ``read_speckle`` from the v3 objects of a Speckle version
+(``version_objects``), ``simple_features`` adds the plan footprint of every element,
+``element_meshes_glb`` writes the meshes as glTF, and ``read_parquet`` reads a model
+back from the (Geo)Parquet that ``BimDataFrame.write_parquet`` wrote.
+``georeferenced_bim_crs``, ``set_crs``, ``to_crs`` and ``with_geog`` (from
+``bimpolars.geobim``) georeference a model, and ``bimpolars.data`` fetches the test
 models.
 
-:func:`read_ifc` needs ifcopenshell, the extra ``bimpolars[ifc]``: ``bimpolars.ifc`` is imported
+``read_ifc`` needs ifcopenshell, the extra ``bimpolars[ifc]``: ``bimpolars.ifc`` is imported
 when ``read_ifc`` is first looked up, so the rest of the package works without it.
 """
 
@@ -83,7 +83,7 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    """Imports :mod:`bimpolars.ifc`, and so ifcopenshell, when ``read_ifc`` is first used."""
+    """Imports ``bimpolars.ifc``, and so ifcopenshell, when ``read_ifc`` is first used."""
     if name == "read_ifc":
         from bimpolars.ifc import read_ifc
 

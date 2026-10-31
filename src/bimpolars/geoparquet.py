@@ -1,9 +1,9 @@
 """GeoParquet metadata for the geometry columns of a BimDataFrame.
 
-A Parquet file is `GeoParquet <https://geoparquet.org>`_ when its file metadata has a ``geo``
-key that names the geometry columns, their encoding and their CRS. :func:`geo_metadata` builds
-that entry for a frame with a WKB geometry column from :data:`GEOMETRY_COLUMNS`, each with its
-CRS as PROJJSON (the BIM CRS, except for the columns of :data:`COLUMN_CRS`: ``geog`` is
+A Parquet file is GeoParquet (https://geoparquet.org) when its file metadata has a ``geo``
+key that names the geometry columns, their encoding and their CRS. ``geo_metadata`` builds
+that entry for a frame with a WKB geometry column from ``GEOMETRY_COLUMNS``, each with its
+CRS as PROJJSON (the BIM CRS, except for the columns of ``COLUMN_CRS``: ``geog`` is
 always OGC:CRS84h), so that DuckDB spatial, geopandas and GDAL read the frame with its CRS.
 When the frame has its ``bbox`` column, the entry also names it as the *covering* of each
 column in the BIM CRS: a pointer that tells a reader that each row's geometry lies within
@@ -75,10 +75,10 @@ _EWKB_FLAGS = 0xE0000000
 def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any] | None) -> dict[str, Any] | None:
     """Builds the GeoParquet ``geo`` metadata of a frame.
 
-    Every column of :data:`GEOMETRY_COLUMNS` the frame has is listed with ``encoding`` WKB,
+    Every column of ``GEOMETRY_COLUMNS`` the frame has is listed with ``encoding`` WKB,
     the geometry types found in its values and its CRS as PROJJSON: the BIM CRS, or the
-    column's own from :data:`COLUMN_CRS` (``geog`` is in OGC:CRS84h). When the frame has a
-    :data:`BBOX_COLUMN` Struct, each column in the BIM CRS also gets that column as its
+    column's own from ``COLUMN_CRS`` (``geog`` is in OGC:CRS84h). When the frame has a
+    ``BBOX_COLUMN`` Struct, each column in the BIM CRS also gets that column as its
     ``covering`` (the x and y fields: a GeoParquet covering has no z slot) and a ``bbox`` of
     the whole file. That file ``bbox`` is x and y only as well, on purpose: a footprint lies
     flat at its storey's elevation, which is often outside the mesh's ``zmin..zmax`` that the
@@ -87,17 +87,19 @@ def geo_metadata(frame: pl.DataFrame, crs: Mapping[str, Any] | None) -> dict[str
     ``bbox`` and no covering.
 
     Args:
-        frame: The frame about to be written.
-        crs: The BIM CRS as PROJJSON, or None when it is unknown (a frame without rows has
-            none): the columns in it then get a null ``crs``, GeoParquet's unknown CRS.
+        frame (pl.DataFrame): The frame about to be written.
+        crs (Mapping[str, Any] | None): The BIM CRS as PROJJSON, or None when it is unknown (a frame
+            without rows has none): the columns in it then get a null ``crs``, GeoParquet's unknown
+            CRS.
 
     Returns:
-        The metadata as a JSON-ready dict, or None when the frame has no geometry column.
+        dict[str, Any] | None: The metadata as a JSON-ready dict, or None when the frame has no
+        geometry column.
 
     Raises:
         TypeError: If a geometry column is not Binary.
-        ValueError: If a geometry column holds values that are not ISO WKB, or WKB that
-            GeoParquet does not allow (see :func:`_wkb_geometry_types`).
+        ValueError: If a geometry column holds values that are not ISO WKB.
+        ValueError: If a geometry column holds WKB that GeoParquet does not allow.
     """
     present = [name for name in GEOMETRY_COLUMNS if name in frame.columns]
     if not present:
@@ -163,15 +165,15 @@ def _wkb_geometry_types(wkb: pl.Series) -> list[str]:
     the type code, is refused rather than described as ISO.
 
     Args:
-        wkb: A Binary Series of WKB geometries; nulls are skipped.
+        wkb (pl.Series): A Binary Series of WKB geometries; nulls are skipped.
 
     Returns:
-        The names of the geometry types present, such as ``["Polygon Z", "MultiPolygon Z"]``,
-        in the order of their type codes; empty for a column without values.
+        list[str]: The names of the geometry types present, such as ``["Polygon Z", "MultiPolygon
+        Z"]``, in the order of their type codes; empty for a column without values.
 
     Raises:
-        ValueError: If a value is not WKB, is extended WKB, or has M coordinates (not allowed
-            in GeoParquet).
+        ValueError: If a value is not WKB, or is extended WKB.
+        ValueError: If a value has M coordinates, which GeoParquet does not allow.
     """
     values = wkb.drop_nulls()
     if values.is_empty():

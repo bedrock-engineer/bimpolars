@@ -53,39 +53,40 @@ def read_ifc(
     - ``name``: the Name attribute.
     - ``class``: the IFC class, Categorical.
     - ``properties``: a Struct with one Struct per property or quantity set, the type's sets
-      included; see :func:`bimpolars.properties.properties_series` for the dtypes. The set
-      :data:`ATTRIBUTES_PSET` holds the entity's ``PredefinedType`` (resolved through its
+      included; see ``bimpolars.properties.properties_series`` for the dtypes. The set
+      ``ATTRIBUTES_PSET`` holds the entity's ``PredefinedType`` (resolved through its
       type and ``ObjectType``) when it has one. A row without any set is a Struct of nulls.
     - ``container``: the ``id`` of the spatial element the row sits in: for an element, its
       storey (or the spatial element that contains its aggregate); for a spatial element, its
       parent in the spatial structure. Null for the site, for an element in no container and
       for ports, which hang off their element rather than a spatial element.
-    - ``elevation``: on storeys, the level in model coordinates; see :func:`_elevations`.
-    - ``native_geom``: :data:`bimpolars.NATIVE_GEOM_DTYPE`, the ``IfcExtrudedAreaSolid``
+    - ``elevation``: on storeys, the level in model coordinates; see ``_elevations``.
+    - ``native_geom``: ``bimpolars.NATIVE_GEOM_DTYPE``, the ``IfcExtrudedAreaSolid``
       items of the Body representation (mapped items resolved; a difference or intersection
       reduced to its first operand, flagged ``clipped``; both operands of a union), each with
       its placement in model coordinates, its profile as a 2D polygon, depth and direction.
       Items of other kinds (breps, revolved or tapered sweeps) and profiles this reader cannot
       outline are left out, so the list can describe part of a body; null when there is
       nothing to list. The LightBIM
-      reduction (:func:`bimpolars.simple_features` with ``lightbim=True``) takes the axis or
+      reduction (``bimpolars.simple_features`` with ``lightbim=True``) takes the axis or
       midplane of a member from it.
-    - ``mesh``: :data:`bimpolars.MESH_DTYPE`, with faces sorted by style. A style is named
+    - ``mesh``: ``bimpolars.MESH_DTYPE``, with faces sorted by style. A style is named
       after its IfcSurfaceStyle, or ``IfcSurfaceStyle-<step id>`` when that has no name; faces
       without any surface style get a null name and ifcopenshell's grey. Two surface styles
       with the same name but different colours give two entries with one name, so group by
       ``(name, rgba)`` when one material per style is needed.
-    - ``bbox``: :data:`bimpolars.BBOX_DTYPE` of the mesh.
+    - ``bbox``: ``bimpolars.BBOX_DTYPE`` of the mesh.
 
     The CRS is a plain engineering CRS in the model's length unit: the IFC's coordinates as they
     are. Georeferencing (IfcMapConversion) is not read yet.
 
     Args:
-        source: The IFC file's path, or an open ``ifcopenshell.file``.
-        threads: Threads for the tessellation; all CPUs by default.
+        source (str | os.PathLike[str] | ifcopenshell.file): The IFC file's path, or an open
+            ``ifcopenshell.file``.
+        threads (int | None): Threads for the tessellation; all CPUs by default.
 
     Returns:
-        The model as a BimDataFrame.
+        BimDataFrame: The model as a BimDataFrame.
     """
     model = (
         source if isinstance(source, ifcopenshell.file) else ifcopenshell.open(os.fspath(source))
@@ -192,7 +193,7 @@ def _elevations(products: Sequence[ifcopenshell.entity_instance]) -> list[float 
 def _psets(product: ifcopenshell.entity_instance) -> dict[str, dict[str, Any]]:
     """The product's property and quantity sets, its type's included, without the set ids.
 
-    The set :data:`ATTRIBUTES_PSET` carries the predefined type, which is an attribute rather
+    The set ``ATTRIBUTES_PSET`` carries the predefined type, which is an attribute rather
     than a property but names the structural kind of a slab (``BASESLAB``), a footing
     (``PILE_CAP``) or a member (``BRACE``).
     """
@@ -215,7 +216,7 @@ def _native_geoms(products: Sequence[ifcopenshell.entity_instance]) -> pl.Series
 
 
 def _sweeps(product: ifcopenshell.entity_instance) -> list[dict[str, Any]] | None:
-    """The sweeps of one product as :data:`bimpolars.SWEEP_DTYPE` rows; None without any."""
+    """The sweeps of one product as ``bimpolars.SWEEP_DTYPE`` rows; None without any."""
     if not product.Representation:
         return None
     sweeps = []
@@ -259,9 +260,9 @@ def _body_items(
     or an intersection is reduced to its first operand, the solid before anything was cut
     away, and a union gives both of its operands.
 
-    Yields:
-        The matrix from the item's coordinates to model coordinates, the item, and whether a
-        boolean result was reduced.
+    Returns:
+        Iterator[tuple]: The matrix from the item's coordinates to model coordinates, the item,
+        and whether a boolean result was reduced, one item at a time.
     """
     placement = (
         ifcopenshell.util.placement.get_local_placement(product.ObjectPlacement)
@@ -305,16 +306,16 @@ def _profile_outline(profile: ifcopenshell.entity_instance) -> shapely.Polygon:
     """The swept area of a profile as a polygon in the extrusion's XY plane.
 
     Args:
-        profile: An IfcRectangleProfileDef (hollow included), IfcCircleProfileDef (hollow
-            included), IfcIShapeProfileDef, IfcAsymmetricIShapeProfileDef or
-            IfcArbitraryClosedProfileDef (with voids).
+        profile (ifcopenshell.entity_instance): An IfcRectangleProfileDef (hollow included),
+            IfcCircleProfileDef (hollow included), IfcIShapeProfileDef,
+            IfcAsymmetricIShapeProfileDef or IfcArbitraryClosedProfileDef (with voids).
 
     Returns:
-        The outline with the profile's own Position applied; voids are holes.
+        shapely.Polygon: The outline with the profile's own Position applied; voids are holes.
 
     Raises:
-        NotImplementedError: For any other kind of profile, or a curve
-            :func:`_curve_points` cannot sample.
+        NotImplementedError: For any other kind of profile.
+        NotImplementedError: For a curve ``_curve_points`` cannot sample.
     """
     if profile.is_a("IfcRectangleProfileDef"):
         half_x, half_y = profile.XDim / 2, profile.YDim / 2
@@ -383,11 +384,11 @@ def _curve_points(curve: ifcopenshell.entity_instance) -> list[tuple[float, floa
     """Samples a 2D bounded curve of a profile.
 
     Args:
-        curve: An IfcPolyline, IfcIndexedPolyCurve, IfcCircle, IfcTrimmedCurve on a circle
-            or a line, or an IfcCompositeCurve of those.
+        curve (ifcopenshell.entity_instance): An IfcPolyline, IfcIndexedPolyCurve, IfcCircle,
+            IfcTrimmedCurve on a circle or a line, or an IfcCompositeCurve of those.
 
     Returns:
-        The points along the curve; arcs get a point every :data:`_ARC_STEP`.
+        list[tuple[float, float]]: The points along the curve; arcs get a point every ``_ARC_STEP``.
 
     Raises:
         NotImplementedError: For any other kind of curve.
@@ -493,7 +494,7 @@ def _trim_point(
 def _arc_points(
     circle: ifcopenshell.entity_instance, start: float, end: float
 ) -> list[tuple[float, float]]:
-    """Points on an IfcCircle from angle ``start`` to ``end``, one every :data:`_ARC_STEP`."""
+    """Points on an IfcCircle from angle ``start`` to ``end``, one every ``_ARC_STEP``."""
     count = max(2, math.ceil(abs(end - start) / _ARC_STEP) + 1)
     angles = np.linspace(start, end, count)
     matrix = ifcopenshell.util.placement.get_axis2placement(circle.Position)
@@ -547,8 +548,8 @@ def _tessellate(model: ifcopenshell.file, threads: int) -> pl.DataFrame:
     """Tessellates every product with a representation, in world coordinates and model units.
 
     Returns:
-        One row per product that has a shape: ``mesh`` (:data:`bimpolars.MESH_DTYPE`),
-        ``bbox`` (:data:`bimpolars.BBOX_DTYPE`) and its STEP id as ``step_id``.
+        pl.DataFrame: One row per product that has a shape: ``mesh`` (``bimpolars.MESH_DTYPE``),
+        ``bbox`` (``bimpolars.BBOX_DTYPE``) and its STEP id as ``step_id``.
 
     Raises:
         ValueError: If ifcopenshell yields two shapes for one product.

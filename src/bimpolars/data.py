@@ -1,8 +1,8 @@
 """Test and example data: a local folder, filled from the bimpolars bucket on first use.
 
-The models the tests and examples use live at :data:`DATA_URL`. :func:`fetch` looks for a file
-in :func:`data_dir` first and downloads it only when it is missing there. Point the environment
-variable :data:`DATA_DIR_ENV` at a folder that already holds the files (a mirror of the bucket
+The models the tests and examples use live at ``DATA_URL``. ``fetch`` looks for a file
+in ``data_dir`` first and downloads it only when it is missing there. Point the environment
+variable ``DATA_DIR_ENV`` at a folder that already holds the files (a mirror of the bucket
 with the same keys) to work without network access.
 """
 
@@ -84,10 +84,10 @@ class SpeckleVersion(NamedTuple):
     """A Speckle version of the test data: its ids and the key prefix of its bundle.
 
     Attributes:
-        model_id: The Speckle model id.
-        version_id: The Speckle version id, as :func:`bimpolars.speckle.version_objects` wants it.
-        bundle: The key prefix of the bundle's tables: ``<prefix>.<table>.parquet``, for
-            :func:`fetch_bundle`.
+        model_id (str): The Speckle model id.
+        version_id (str): The Speckle version id, as ``bimpolars.speckle.version_objects`` wants it.
+        bundle (str): The key prefix of the bundle's tables: ``<prefix>.<table>.parquet``, for
+            ``fetch_bundle``.
     """
 
     model_id: str
@@ -124,7 +124,7 @@ def data_dir() -> Path:
     """The local data folder.
 
     Returns:
-        The folder named by :data:`DATA_DIR_ENV`, or ``bimpolars`` under the user's cache
+        Path: The folder named by ``DATA_DIR_ENV``, or ``bimpolars`` under the user's cache
         folder when the variable is not set: ``$XDG_CACHE_HOME`` if set, else ``~/.cache``.
     """
     configured = os.environ.get(DATA_DIR_ENV)
@@ -138,15 +138,15 @@ def bucket_key(key_or_url: str) -> str:
     """Gives the bucket key of a data file, from the key itself or from its URL in the bucket.
 
     Args:
-        key_or_url: A key such as :data:`SIXTY5_STRUCTURAL`, or its URL: :data:`DATA_URL`
+        key_or_url (str): A key such as ``SIXTY5_STRUCTURAL``, or its URL: ``DATA_URL``
             (``http`` or ``https``) followed by the key, percent-encoded or not.
 
     Returns:
-        The key, relative to the bucket and to :func:`data_dir`.
+        str: The key, relative to the bucket and to ``data_dir``.
 
     Raises:
-        ValueError: If a URL is not in the bucket (fetch such a file yourself), or the key
-            would leave the data folder: an absolute path, a drive, or a ``..`` segment.
+        ValueError: If a URL is not in the bucket; fetch such a file yourself.
+        ValueError: If the key leaves the data folder: an absolute path, a drive or ``..``.
     """
     key = key_or_url
     if _URL.match(key_or_url):
@@ -166,13 +166,13 @@ def fetch(key: str, *, download: bool = True) -> Path:
     """Gives the local path of a data file, downloading it on first use.
 
     Args:
-        key: The file's key in the bucket, such as :data:`SIXTY5_STRUCTURAL` or
+        key (str): The file's key in the bucket, such as ``SIXTY5_STRUCTURAL`` or
             ``"rvt-advanced-sample/speckle-v3-objects.parquet"``, or its URL in the bucket
-            (:func:`bucket_key`).
-        download: Whether to download a file that is not in :func:`data_dir`.
+            (``bucket_key``).
+        download (bool): Whether to download a file that is not in ``data_dir``.
 
     Returns:
-        The path of the file in :func:`data_dir`.
+        Path: The path of the file in ``data_dir``.
 
     Raises:
         ValueError: If ``key`` is a URL outside the bucket.
@@ -204,17 +204,17 @@ def fetch_bundle(prefix: str, *, download: bool = True) -> Path:
     """Gives the local folder of a Speckle bundle, downloading its tables on first use.
 
     Args:
-        prefix: The key prefix of the bundle's tables, such as ``RVT_SPECKLE_ARCH.bundle``,
-            or its URL in the bucket (:func:`bucket_key`): every table of
-            :data:`BUNDLE_TABLES` is fetched as ``<prefix>.<table>.parquet``, except the
-            :data:`REVIT_TABLES` that the bucket does not have (an IFC file's bundle) or,
+        prefix (str): The key prefix of the bundle's tables, such as ``RVT_SPECKLE_ARCH.bundle``,
+            or its URL in the bucket (``bucket_key``): every table of
+            ``BUNDLE_TABLES`` is fetched as ``<prefix>.<table>.parquet``, except the
+            ``REVIT_TABLES`` that the bucket does not have (an IFC file's bundle) or,
             with ``download`` False, the folder does not. Overflow geometry shards are not
-            fetched (see :data:`BUNDLE_TABLES`).
-        download: Whether to download the tables that are not in :func:`data_dir`.
+            fetched (see ``BUNDLE_TABLES``).
+        download (bool): Whether to download the tables that are not in ``data_dir``.
 
     Returns:
-        The folder holding the tables, for :func:`bimpolars.read_speckle` and
-        :func:`bimpolars.bundle.bundle_objects`.
+        Path: The folder holding the tables, for ``bimpolars.read_speckle`` and
+        ``bimpolars.bundle.bundle_objects``.
 
     Raises:
         ValueError: If ``prefix`` is a URL outside the bucket.
