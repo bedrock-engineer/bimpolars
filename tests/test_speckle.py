@@ -1,9 +1,9 @@
 """read_speckle on the Revit Advanced Sample versions (arch, str, mep) with their bundles.
 
-The numbers come from the v3 objects specklepy 2026.9.1 projected from the bundles (the
+The numbers come from the v3 objects specklepy 2026.9.1 built from the bundles (the
 bucket's ``speckle-v3-objects.parquet`` of 2026-10-29: four versions, 44,452 objects, an
 element's own geometry kept when its definition is empty) and from the bundles themselves
-(rvextract, schema 1.5)."""
+(rvextract, schema 1.5; the IFC version's: ifc, schema 1.2)."""
 
 from __future__ import annotations
 
@@ -33,8 +33,8 @@ from tests.speckle_helpers import INSTANCE_TYPE, faces_by_row, own_geometry_and_
 from tests.synthetic import run_without, style_faces
 
 IFC_GUID_SET = "properties.Parameters.Instance Parameters.IFC Parameters"
-IFC_VERSION = "5cb009bb77"
-"""The fourth version of the Parquet: rvt-advanced-sample-arch.ifc received by Speckle."""
+IDENTITY_DATA = "properties.Parameters.Instance Parameters.Identity Data"
+TYPE_IDENTITY_DATA = "properties.Parameters.Type Parameters.Identity Data"
 MEP_STAIR = "e1d4bdfb-2688-47c1-a386-3b48116e5fd2-0008cb48"
 """The stair (Stairs - Massiv - Stufen Naturstein) whose outline needs plan_outline's retry."""
 
@@ -79,6 +79,22 @@ def mep(mep_objects: list[dict]) -> BimDataFrame:
     return read_speckle(mep_objects, data.fetch_bundle(data.RVT_SPECKLE_MEP.bundle))
 
 
+@pytest.fixture(scope="module")
+def ifc_objects(objects_path: Path) -> list[dict]:
+    return version_objects(objects_path, data.RVT_SPECKLE_IFC.version_id)
+
+
+@pytest.fixture(scope="module")
+def ifc(ifc_objects: list[dict]) -> BimDataFrame:
+    return read_speckle(ifc_objects, data.fetch_bundle(data.RVT_SPECKLE_IFC.bundle))
+
+
+def values(bdf: BimDataFrame, pset: str, key: str) -> pl.Series:
+    """The non-null values of one property."""
+    field = pl.col("properties").struct.field(pset).struct.field(key)
+    return bdf.frame.select(field).to_series().drop_nulls()
+
+
 def extent(frame: pl.DataFrame) -> np.ndarray:
     bbox = pl.col("bbox").struct
     return np.array(
@@ -94,7 +110,11 @@ def extent(frame: pl.DataFrame) -> np.ndarray:
 
 
 def test_version_objects(
-    arch_objects: list[dict], str_objects: list[dict], mep_objects: list[dict], objects_path: Path
+    arch_objects: list[dict],
+    str_objects: list[dict],
+    mep_objects: list[dict],
+    ifc_objects: list[dict],
+    objects_path: Path,
 ) -> None:
     assert len(arch_objects) == 13_194
     root = arch_objects[0]
@@ -105,8 +125,7 @@ def test_version_objects(
     assert len(root["instanceDefinitionProxies"]) == 765
     assert len(str_objects) == 5355
     assert len(mep_objects) == 16_173
-    # the IFC export of the arch model, received by Speckle's importer: in metres, no bundle
-    ifc_objects = version_objects(objects_path, IFC_VERSION)
+    # the IFC export of the arch model, received by Speckle's importer: in metres
     assert len(ifc_objects) == 9730
     assert ifc_objects[0]["units"] == "m"
     with pytest.raises(ValueError, match="not in the objects table"):
@@ -120,6 +139,15 @@ def test_fetch_bundle_gives_the_folder_of_tables() -> None:
     assert names == {
         f"advanced_sample_project_arch.{table}.parquet" for table in data.BUNDLE_TABLES
     }
+    # the bundle of an IFC file has no Revit tables
+    folder = data.fetch_bundle(data.RVT_SPECKLE_IFC.bundle)
+    names = {path.name for path in folder.glob("*.parquet")}
+    assert names == {
+        f"rvt-advanced-sample-arch.{table}.parquet"
+        for table in data.BUNDLE_TABLES
+        if table not in data.REVIT_TABLES
+    }
+    assert data.fetch_bundle(data.RVT_SPECKLE_IFC.bundle, download=False) == folder
 
 
 def test_columns_and_crs(arch: BimDataFrame) -> None:
@@ -333,6 +361,42 @@ def test_properties(arch: BimDataFrame, arch_bare: BimDataFrame) -> None:
     assert len(bare) == 50
     assert sum(len(pset.to_schema()) for pset in bare.values()) == 288
     assert frame["properties"].estimated_size() < 25_000_000  # 19.1 MB
+
+
+def test_text_that_reads_as_a_number_stays_text(
+    arch: BimDataFrame, mep: BimDataFrame, ifc: BimDataFrame
+) -> None:
+    """A bundle writes every value as text, and as a number too when the text reads as one;
+    a property is a number only when all its values are (#35)."""
+    # arch: 136 of the 167 Marks and 107 of the 229 Type Marks read as numbers
+    marks = values(arch, IDENTITY_DATA, "Mark")
+    assert marks.dtype == pl.String
+    assert len(marks) == 167
+    assert marks.str.contains(r"^\d+$").sum() == 136  # "129", not "129.0"
+    assert {"305A", "105B"} <= set(marks)
+    type_marks = values(arch, TYPE_IDENTITY_DATA, "Type Mark")
+    assert len(type_marks) == 229
+    assert type_marks.str.contains(r"^\d+$").sum() == 107
+    # mep: the objects specklepy built carry 1348 of the Marks as numbers; the bundle's text
+    # wins over them
+    marks = values(mep, IDENTITY_DATA, "Mark")
+    assert len(marks) == 5220
+    assert marks.str.contains(r"^\d+$").sum() == 5069
+    assert not marks.str.contains(r"\.").any()
+    # elementId is a number on every element
+    for bdf in (arch, mep):
+        assert (
+            bdf.frame.schema["properties"].to_schema()["properties"].to_schema()["elementId"]
+            == pl.Float64
+        )
+    # ifc: eight of the 5569 elements are named by a number (the others like
+    # "Rectangular Mullion:50 x 150mm:186447"), which made the String name column raise
+    frame = ifc.frame
+    assert len(frame) == 5574  # 5569 elements + 5 levels
+    assert frame["name"].null_count() == 0
+    numbered = sorted(frame.filter(pl.col("name").str.contains(r"^\d+$"))["name"])
+    assert numbered == [str(number) for number in range(192_754, 192_762)]
+    assert set(numbered) <= set(values(ifc, "properties.Attributes", "Name"))
 
 
 def test_extent_agrees_with_the_ifc_export(arch: BimDataFrame) -> None:

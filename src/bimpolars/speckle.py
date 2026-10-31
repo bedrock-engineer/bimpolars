@@ -76,6 +76,9 @@ _SKIP_EVERYWHERE = frozenset({"id", "speckle_type", "applicationId", "totalChild
 _SKIP_ON_OBJECT = frozenset({"__closure", "displayValue", "elements", "units", "name", "category"})
 _GEOMETRY_DATA = frozenset({"vertices", "faces", "colors", "textureCoordinates", "vertexNormals"})
 _CONSUMED_PATHS = frozenset({"name", "category", "units", "speckle_type"})
+_TEXT_PATHS = frozenset({"name", "category"})
+"""Eav paths read as text whatever their values look like: they fill the String columns."""
+_VALUE_COLUMNS = ("value_string", "value_double", "value_boolean")
 
 _LEVEL_KIND = 5
 """The envelope's node kind of a level, when ``envelope.node_kinds`` is not there to say (LEVEL)."""
@@ -219,9 +222,14 @@ def read_speckle(
       (``Volume``), and :data:`OBJECT_SET` holds the object's own fields (``family``,
       ``type``). The path is the bundle's eav ``path`` column: ``f"{set}.{name}"``. With a
       bundle, the eav values (type parameters included, instance values winning) fill the
-      rows the objects leave bare, such as the instances. A value keeps the unit Revit states
-      for its parameter (the eav ``unit`` column: lengths in millimetres, areas in square
-      metres, volumes in cubic metres); it is not scaled to the model unit.
+      rows the objects leave bare, such as the instances. The bundle types a value per path:
+      a number (or a boolean) when every value of the path has one, as ``elementId`` does,
+      else text, which also replaces an object's number (specklepy's ``Model.to_base()``
+      builds the objects with a number for every value that reads as one), so that a Mark
+      ``"129"`` stays text next to ``"104A"``. ``name`` and ``category`` are text in any
+      case. A value keeps the unit Revit states for its parameter (the eav ``unit`` column:
+      lengths in millimetres, areas in square metres, volumes in cubic metres); it is not
+      scaled to the model unit.
     - ``container``: with a bundle, the ``id`` of the row's level (``level-<node id>``); the
       levels get rows of their own (class :data:`LEVEL_CLASS`) with their ``elevation``.
     - ``native_geom``: null.
@@ -579,19 +587,24 @@ class _BundleInfo:
         self.names: dict[str, str] = {}
         self.categories: dict[str, str] = {}
         self.fields: dict[str, dict[str, dict[str, Any]]] = {}
-        by_type: dict[int, list[tuple[str, Any]]] = {}
+        eav = tables.require("eav.eav")
         type_eav = tables.get("eav.type_eav")
+        columns = _value_columns([eav, *([type_eav] if type_eav is not None else [])], paths)
+        self.text_fields: set[tuple[str, str]] = {
+            _field(paths[path_index])
+            for path_index, column in columns.items()
+            if column == "value_string"
+        }
+        by_type: dict[int, list[tuple[str, Any]]] = {}
         if type_eav is not None:
-            for type_index, path_index, value in _eav_values(type_eav, "type_index"):
+            for type_index, path_index, value in _eav_values(type_eav, "type_index", columns):
                 by_type.setdefault(type_index, []).append((paths[path_index], value))
         type_of: dict[int, int] = {}
         object_type = tables.get("eav.object_type")
         if object_type is not None:
             type_of = dict(object_type.select("object_index", "type_index").iter_rows())
         values_of: dict[int, list[tuple[str, Any]]] = {}
-        for object_index, path_index, value in _eav_values(
-            tables.require("eav.eav"), "object_index"
-        ):
+        for object_index, path_index, value in _eav_values(eav, "object_index", columns):
             values_of.setdefault(object_index, []).append((paths[path_index], value))
         for object_index, app_id in app_ids.items():
             own = values_of.get(object_index, [])
@@ -635,19 +648,20 @@ class _BundleInfo:
             ):
                 if object_index in app_ids:
                     self.level_of[app_ids[object_index]] = f"{LEVEL_ID_PREFIX}{node_id}"
-        self.model: dict[str, Any] = {}
+        # the model's text by path: the units, the placement and the file name it is read for
+        # are text, which a file name such as "2024" would not stay as a number
+        self.model: dict[str, str] = {}
         model = tables.get("eav.model")
         if model is not None:
-            for path, text, number, flag in model.select(
-                "path", "value_string", "value_double", "value_boolean"
-            ).iter_rows():
-                self.model[path] = _first_value(text, number, flag)
+            for path, text in model.select("path", "value_string").iter_rows():
+                if text is not None:
+                    self.model[path] = text
         self.units: str | None = self.model.get("modelPlacement.units") or self.model.get(
             "document.lengthUnit"
         )
         self.placement_source: str | None = self.model.get("modelPlacement.source")
         file_name = self.model.get("document.fileName")
-        self.name: str | None = Path(str(file_name)).stem if file_name else None
+        self.name: str | None = Path(file_name).stem if file_name else None
 
     def _take(self, app_id: str, own: list[tuple[str, Any]], typed: list[tuple[str, Any]]) -> None:
         """Files an object's eav values, its own winning over its type's, into sets.
@@ -658,15 +672,13 @@ class _BundleInfo:
         """
         fields: dict[str, dict[str, Any]] = {}
         for path, value in [*own, *typed]:
-            pset, _, key = path.rpartition(".")
-            if not pset:
-                if path == "name":
-                    self.names.setdefault(app_id, value)
-                elif path == "category":
-                    self.categories.setdefault(app_id, value)
-                if path in _CONSUMED_PATHS:
-                    continue
-                pset = OBJECT_SET
+            if path == "name":
+                self.names.setdefault(app_id, value)
+            elif path == "category":
+                self.categories.setdefault(app_id, value)
+            if path in _CONSUMED_PATHS:
+                continue
+            pset, key = _field(path)
             fields.setdefault(pset, {}).setdefault(key, value)
         if fields:
             self.fields[app_id] = fields
@@ -681,27 +693,62 @@ def _code(table: pl.DataFrame | None, column: str, name: str, default: int) -> i
     return default
 
 
-def _eav_values(eav: pl.DataFrame, index: str) -> Iterator[tuple[int, int, Any]]:
-    """Yields ``(index, path_index, value)`` with the value as str, float or bool."""
-    for index_value, path_index, text, number, flag in eav.select(
-        index, "path_index", "value_string", "value_double", "value_boolean"
+def _value_columns(eavs: Sequence[pl.DataFrame], paths: Mapping[int, str]) -> dict[int, str]:
+    """The column each eav path's values are read from, decided per path, not per value.
+
+    An eav row has its value as text (``value_string``) and, when the text reads as one, as a
+    number or a boolean too. A path is a number only when every value of it has one
+    (``elementId``: ``130846.0`` and ``"130846"``, the number the objects specklepy builds
+    from the bundle carry), a boolean likewise; otherwise all its values are text, so that a
+    Mark ``"129"`` stays text next to ``"104A"`` and a Mark ``"007"`` keeps its zeros. The
+    objects and their types (``eav.eav`` and ``eav.type_eav``) decide together, since their
+    values meet in one property. :data:`_TEXT_PATHS` are text whatever their values.
+    """
+    present = pl.any_horizontal(pl.col(column).is_not_null() for column in _VALUE_COLUMNS)
+    stats = (
+        pl.concat(
+            [eav.select("path_index", *_VALUE_COLUMNS) for eav in eavs], how="vertical_relaxed"
+        )
+        .filter(present)
+        .group_by("path_index")
+        .agg(
+            number=pl.col("value_double").is_not_null().all(),
+            flag=pl.col("value_boolean").is_not_null().all(),
+        )
+    )
+    columns: dict[int, str] = {}
+    for path_index, number, flag in stats.iter_rows():
+        if paths.get(path_index) in _TEXT_PATHS:
+            columns[path_index] = "value_string"
+        elif number:
+            columns[path_index] = "value_double"
+        elif flag:
+            columns[path_index] = "value_boolean"
+        else:
+            columns[path_index] = "value_string"
+    return columns
+
+
+def _eav_values(
+    eav: pl.DataFrame, index: str, columns: Mapping[int, str]
+) -> Iterator[tuple[int, int, Any]]:
+    """Yields ``(index, path_index, value)``, the value from its path's column."""
+    position = {column: offset for offset, column in enumerate(_VALUE_COLUMNS)}
+    for index_value, path_index, *values in eav.select(
+        index, "path_index", *_VALUE_COLUMNS
     ).iter_rows():
-        value = _first_value(text, number, flag)
+        value = values[position[columns.get(path_index, "value_string")]]
         if value is not None:
             yield index_value, path_index, value
 
 
-def _first_value(text: str | None, number: float | None, flag: bool | None) -> Any:
-    """The typed value of an eav row: its number, else its boolean, else its string.
+def _field(path: str) -> tuple[str, str]:
+    """The property set and key of an eav path: up to its last dot, and what follows it.
 
-    A numeric value comes with its text as well (``elementId`` is ``130846.0`` and
-    ``"130846"``); the number is what specklepy's projection puts on the object.
+    A path without a dot is a field of the object itself, in :data:`OBJECT_SET`.
     """
-    if number is not None:
-        return number
-    if flag is not None:
-        return flag
-    return text
+    pset, _, key = path.rpartition(".")
+    return pset or OBJECT_SET, key
 
 
 def _frame(rows: list[_Row], info: _BundleInfo | None, unit: LinearUnit) -> pl.DataFrame:
@@ -739,7 +786,12 @@ def _frame(rows: list[_Row], info: _BundleInfo | None, unit: LinearUnit) -> pl.D
             for pset, values in info.fields.get(row.key, {}).items():
                 target = row_fields.setdefault(pset, {})
                 for key, value in values.items():
-                    target.setdefault(key, value)
+                    if (pset, key) in info.text_fields:
+                        # the bundle's text over the object's value: specklepy builds the
+                        # objects with a number where the text reads as one
+                        target[key] = value
+                    else:
+                        target.setdefault(key, value)
         names.append(row_name)
         classes.append(klass or row.speckle_type)
         containers.append(container)

@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path, PureWindowsPath
@@ -40,9 +41,8 @@ RVT_ADVANCED_SAMPLE_ARCH = "rvt-advanced-sample-arch.ifc"
 RVT_SPECKLE_V3_OBJECTS = "rvt-advanced-sample/speckle-v3-objects.parquet"
 """The v3 objects of the Revit Advanced Sample versions on app.speckle.systems, one row per
 object (``version_id``, ``object_id``, ``is_root``, ``content``), as
-:func:`bimpolars.speckle.version_objects` reads them: the arch, str and mep versions below,
-projected from their bundles, and ``5cb009bb77`` (model ``e7f5f7f943``), the IFC export of
-the arch model received by Speckle's importer: 9730 objects in metres, no bundle."""
+:func:`bimpolars.speckle.version_objects` reads them: the four versions below, each built
+from its bundle by specklepy (``Model.to_base()``)."""
 
 BUNDLE_TABLES: tuple[str, ...] = (
     "eav.eav",
@@ -65,12 +65,19 @@ BUNDLE_TABLES: tuple[str, ...] = (
     "geometries",
 )
 """The tables of a Revit bundle (rvextract schema 1.5), each a ``<name>.<table>.parquet`` file,
-which :func:`fetch_bundle` fetches.
+which :func:`fetch_bundle` fetches. A bundle of an IFC file lacks the :data:`REVIT_TABLES`.
 
 A bundle with more than 1.5 GiB of uncompressed geometry has overflow shards,
 ``<name>.geometries.<N>.parquet``, which this list does not name and :func:`fetch_bundle`
 does not fetch: the elements whose geometry is in them would have no mesh. The RVT samples
 have one shard each. Read such a bundle from a complete folder instead."""
+
+REVIT_TABLES: tuple[str, ...] = (
+    "eav.revit_external_links",
+    "eav.revit_views",
+    "eav.revit_warnings",
+)
+"""The tables of :data:`BUNDLE_TABLES` that only a Revit bundle has."""
 
 
 class SpeckleVersion(NamedTuple):
@@ -105,6 +112,12 @@ RVT_SPECKLE_MEP = SpeckleVersion(
     "ef7cb591fc", "4413abe507", f"{_RVT_BUNDLES}/ef7cb591fc/4413abe507/advanced_sample_project_mep"
 )
 """Revit Advanced Sample Project, MEP, on Speckle: 16,173 v3 objects, 8625 bundle objects."""
+
+RVT_SPECKLE_IFC = SpeckleVersion(
+    "e7f5f7f943", "5cb009bb77", f"{_RVT_BUNDLES}/e7f5f7f943/5cb009bb77/rvt-advanced-sample-arch"
+)
+""":data:`RVT_ADVANCED_SAMPLE_ARCH` received by Speckle's IFC importer: 9730 v3 objects in
+metres, 5569 bundle objects on 5 levels; the bundle (ifc schema 1.2) has no :data:`REVIT_TABLES`."""
 
 
 def data_dir() -> Path:
@@ -193,8 +206,10 @@ def fetch_bundle(prefix: str, *, download: bool = True) -> Path:
     Args:
         prefix: The key prefix of the bundle's tables, such as ``RVT_SPECKLE_ARCH.bundle``,
             or its URL in the bucket (:func:`bucket_key`): every table of
-            :data:`BUNDLE_TABLES` is fetched as ``<prefix>.<table>.parquet``. Overflow
-            geometry shards are not (see :data:`BUNDLE_TABLES`).
+            :data:`BUNDLE_TABLES` is fetched as ``<prefix>.<table>.parquet``, except the
+            :data:`REVIT_TABLES` that the bucket does not have (an IFC file's bundle) or,
+            with ``download`` False, the folder does not. Overflow geometry shards are not
+            fetched (see :data:`BUNDLE_TABLES`).
         download: Whether to download the tables that are not in :func:`data_dir`.
 
     Returns:
@@ -207,5 +222,11 @@ def fetch_bundle(prefix: str, *, download: bool = True) -> Path:
         urllib.error.URLError: If a download fails.
     """
     for table in BUNDLE_TABLES:
-        path = fetch(f"{prefix}.{table}.parquet", download=download)
+        try:
+            path = fetch(f"{prefix}.{table}.parquet", download=download)
+        except (FileNotFoundError, urllib.error.HTTPError) as error:
+            absent = not isinstance(error, urllib.error.HTTPError) or error.code == 404
+            if table in REVIT_TABLES and absent:
+                continue
+            raise
     return path.parent

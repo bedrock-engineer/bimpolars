@@ -60,12 +60,13 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   in shared coordinates (the survey point), 49 s to read.
 - `rvt-advanced-sample/speckle-v3-objects.parquet` (`data.RVT_SPECKLE_V3_OBJECTS`, 16.7 MB,
   44,452 objects in four versions, each version's root first: arch `d5e5bacdde` 13,194
-  objects, str `b66058b4d1` 5355, mep `4413abe507` 16,173, all `projected` from the bundles
-  with specklepy 2026.9.1 so that an element whose definition is empty carries its own
-  geometry; and `5cb009bb77`, `rvt-advanced-sample-arch.ifc` received by Speckle's IFC
-  importer, 9730 objects in metres without a bundle) and the bundles
+  objects, str `b66058b4d1` 5355, mep `4413abe507` 16,173, and `5cb009bb77`,
+  `rvt-advanced-sample-arch.ifc` received by Speckle's IFC importer, 9730 objects in metres;
+  all built from the bundles by specklepy 2026.9.1 (`v3_route` "projected", specklepy's word),
+  so that an element whose definition is empty carries its own geometry) and the bundles
   `rvt-advanced-sample/speckle-bundle/<model id>/<version id>/<name>.<table>.parquet`
-  (`data.RVT_SPECKLE_ARCH/STR/MEP`, 18 tables each, `data.fetch_bundle`); `bundle_objects`
+  (`data.RVT_SPECKLE_ARCH/STR/MEP`, 18 tables each, and `data.RVT_SPECKLE_IFC`, 15: no
+  `REVIT_TABLES`; `data.fetch_bundle`); `bundle_objects`
   reproduces each version from its bundle, object for object, in 3 to 4 s. `read_speckle` with
   the bundle, all in mm at the project base point: arch 5877 rows = 5761 elements with an
   object (396 with geometry of their own, 5365 instances, all with a category from the
@@ -87,4 +88,8 @@ Keys and the known numbers for assertions (ifcopenshell 0.9.0.post1):
   meshes, 420,077 faces, 30 styles, 91 sets with 1098 fields (58 MB), 3.4 s;
   `simple_features` 7 s; six conceptual masses (`Mass`, geometry of their own) lie up to 77 m
   west and 122 m south of the building, whose other elements span x -19.4..53.1 m, y
-  -13.7..41.9 m.
+  -13.7..41.9 m. IFC: 5574 rows (5569 elements + 5 levels), 5512 with a mesh; the bundle has
+  no `category`, so `class` is the `InstanceProxy` type or null. Text that reads as a number
+  (#35): 8 IFC elements are named by one (`192754`..`192761`), 136 of the 167 arch `Mark`s
+  and 107 of its 229 `Type Mark`s, 5069 of the 5220 mep `Mark`s (1348 of them numbers on the
+  objects).
