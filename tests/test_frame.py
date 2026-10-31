@@ -1,9 +1,12 @@
+import html
 import io
 import json
+import re
 
 import polars as pl
 import pyproj
 import pytest
+import shapely
 
 import bimpolars as bpl
 from bimpolars import BBOX_DTYPE, MESH_DTYPE, BimDataFrame, engineering_crs, read_parquet
@@ -205,12 +208,39 @@ def test_arrow_readers_see_the_frame(small: BimDataFrame) -> None:
     assert pyarrow.table(small).num_rows == 2
 
 
-def test_the_display_shows_the_crs_name_once(small: BimDataFrame) -> None:
-    assert "Small model" in repr(small)
-    assert CRS_COLUMN not in repr(small)
-    html = small._repr_html_()
-    assert html.count("Small model") == 1
-    assert CRS_COLUMN not in html
+def test_the_display_names_the_crs_of_every_row(small: BimDataFrame) -> None:
+    projjson = crs_text(small.projjson)
+    rd = bpl.set_crs(small, "EPSG:7415")
+    for text in (repr(small), small._repr_html_(), repr(bpl.concat([small, rd]))):
+        assert CRS_COLUMN in text
+        assert projjson[:30] not in text
+    assert small._repr_html_().count("Small model") == 3  # above the table, and on both rows
+    mixed = bpl.concat([small, rd])._repr_html_()
+    assert "2 CRSs" in mixed
+    assert mixed.count("Amersfoort") == 3  # polars shortens long text in a table
+
+
+def test_marimo_shows_crs_names_and_wkt(small: BimDataFrame) -> None:
+    pytest.importorskip("marimo")
+    corner = shapely.box(0, 0, 1000.123456, 2000)
+    wkb = shapely.to_wkb(corner, flavor="iso")
+    bdf = small.with_columns(footprint=pl.Series([None, wkb], dtype=pl.Binary))
+    # The cells marimo shows; it sends the raw values too, for copying
+    shown = re.search(r"data-data='([^']*)'", html.unescape(bdf._display_().text))
+    assert shown is not None
+    assert shown[1].count("Small model") == 2
+    assert "EngineeringCRS" not in shown[1]  # no PROJJSON
+    assert shapely.to_wkt(corner, rounding_precision=3)[:40] in shown[1]
+    assert bdf.frame["footprint"][1] == wkb  # only the display changes
+
+
+def test_narwhals_and_marimo_tables_read_the_frame(small: BimDataFrame) -> None:
+    nw = pytest.importorskip("narwhals")
+    assert nw.from_native(small).to_native() is small.frame
+    mo = pytest.importorskip("marimo")
+    table = mo.ui.table(small)
+    assert "marimo-table" in table.text
+    assert table.value.columns == small.columns  # a selection is the polars frame
 
 
 def test_concat_keeps_the_crs_of_every_row(small: BimDataFrame) -> None:

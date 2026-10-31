@@ -36,9 +36,13 @@ the `LIGHTBIM_COLUMNS` ([lightbim.md](lightbim.md)) and `geobim.with_geog` the `
   columns, like polars; `__arrow_c_stream__` serves `pl.DataFrame(bdf)`, pyarrow and DuckDB.
   The public functions take a polars DataFrame with `bim_crs` too (`frame.as_bim_dataframe`),
   because `pipe` and a `group_by` loop hand out plain frames.
-  `mo.ui.table(bdf)` still fails: marimo picks a table by `isinstance` or narwhals, and
-  neither reads the Arrow stream, so pass `bdf.frame` there. A cell whose output is `bdf`
-  shows `_display_`: the CRS name above a table without `bim_crs`.
+  marimo picks a table by `isinstance` or narwhals and ignores the Arrow stream, so
+  `__narwhals_dataframe__` hands narwhals the compliant frame of `nw.from_native(frame)`.
+  narwhals has no public way for a wrapper to do that, so it reads the private
+  `_compliant_frame`; `test_narwhals_and_marimo_tables_read_the_frame` pins it. A cell whose
+  output is `bdf` shows `_display_`: the CRS name above a table whose `format_mapping` shows
+  `bim_crs` as CRS names and the WKB columns as WKT (`repr` and `_repr_html_` show the names
+  too); the values stay PROJJSON and WKB, so a selection wraps again with `BimDataFrame`.
 - Parquet layout 2: the `bimpolars` metadata entry is `{"version": 2}` and the CRS is in the
   column; a file of layout 1 (`{"version": 1, "crs": ...}`) gets the column on read.
 

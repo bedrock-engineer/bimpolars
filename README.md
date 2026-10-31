@@ -82,8 +82,8 @@ read it through the Arrow stream. The bimpolars functions also take the plain po
 that `bdf.pipe(...)` and a `group_by` loop hand out, as long as they kept `bim_crs`.
 `bimpolars.concat(bdfs)` stacks models, every row keeping its own CRS; a frame whose rows are
 in more than one CRS, or that has no rows, has no `bdf.crs` (it raises and says why) and
-`to_crs` refuses it. A notebook shows the CRS name once, above the table, without the
-`bim_crs` column; marimo's `mo.ui.table` takes `bdf.frame`.
+`to_crs` refuses it. A notebook shows each row's CRS by its name in the `bim_crs` column and
+the WKB columns as WKT, display only; `mo.ui.table(bdf)` works too, with the raw values.
 
 ## Functions
 

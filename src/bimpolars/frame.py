@@ -5,15 +5,22 @@ from __future__ import annotations
 import functools
 import importlib
 import json
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import IO, Any, Literal
 
 import polars as pl
 import pyproj
+import shapely
 
 from bimpolars.crs import CRSLike, resolve_crs
-from bimpolars.geoparquet import COLUMN_CRS, GEO_METADATA_KEY, GEOMETRY_COLUMNS, geo_metadata
+from bimpolars.geoparquet import (
+    COLUMN_CRS,
+    GEO_METADATA_KEY,
+    GEOG_COLUMN,
+    GEOMETRY_COLUMNS,
+    geo_metadata,
+)
 
 CRS_COLUMN = "bim_crs"
 """The column that holds the BIM CRS of every row, as PROJJSON text."""
@@ -107,6 +114,9 @@ MODEL_COLUMNS: tuple[str, ...] = (
     CRS_COLUMN,
 )
 """The columns every reader fills, in order."""
+
+_WKT_LENGTH = 60
+"""How many characters of a geometry's WKT a display shows."""
 
 ConcatMethod = Literal["vertical", "vertical_relaxed", "diagonal", "diagonal_relaxed"]
 """The ``how`` of :func:`concat`: the polars concat strategies that stack rows."""
@@ -293,23 +303,37 @@ class BimDataFrame:
         """The Arrow PyCapsule stream of :attr:`frame`, for ``pl.DataFrame(bdf)`` and DuckDB."""
         return self._frame.__arrow_c_stream__(requested_schema)
 
+    def __narwhals_dataframe__(self) -> object:
+        """The narwhals frame of :attr:`frame`, so that ``mo.ui.table(bdf)`` takes the model.
+
+        marimo makes a table of anything narwhals reads, as altair and plotly chart it. A
+        wrapper has no public way to hand narwhals its native frame, so this returns the
+        compliant frame of ``narwhals.from_native(frame)``, a private attribute that
+        ``test_narwhals_and_marimo_tables_read_the_frame`` pins.
+        """
+        nw = importlib.import_module("narwhals")  # only narwhals calls this, so it is there
+        return nw.from_native(self._frame)._compliant_frame
+
     def __repr__(self) -> str:
-        return (
-            f"BimDataFrame({len(self)} rows, crs={_label(self._frame)})\n"
-            f"{self._frame.drop(CRS_COLUMN, strict=False)!r}"
-        )
+        return f"BimDataFrame({len(self)} rows, crs={_label(self._frame)})\n{_named(self._frame)!r}"
 
     def _repr_html_(self) -> str:
         return (
             f"<p><b>BimDataFrame</b>: crs {_label(self._frame)}</p>"
-            f"{self._frame.drop(CRS_COLUMN, strict=False)._repr_html_()}"
+            f"{_named(self._frame)._repr_html_()}"
         )
 
     def _display_(self) -> object:
-        """What marimo shows: the CRS name above an interactive table without ``bim_crs``."""
+        """What marimo shows: the CRS name above an interactive table of the frame.
+
+        The table shows each row's ``bim_crs`` as the name of its CRS, so that a frame of
+        several CRSs says which row is in which, and the WKB geometry columns as the start of
+        their WKT. Only the display changes: the values stay PROJJSON and WKB.
+        """
         mo = importlib.import_module("marimo")  # only marimo calls this, so it is there
         header = mo.md(f"**BimDataFrame**: crs {_label(self._frame)}")
-        return mo.vstack([header, mo.ui.table(self._frame.drop(CRS_COLUMN, strict=False))])
+        table = mo.ui.table(self._frame, format_mapping=_display_formats(self._frame))
+        return mo.vstack([header, table])
 
     def with_frame(self, frame: pl.DataFrame) -> BimDataFrame:
         """Wraps another frame, in this model's CRS when the frame has no ``bim_crs`` column.
@@ -596,6 +620,43 @@ def _describe(column: pl.Series) -> str:
     if not len(column):
         parts.append("no rows")
     return " and ".join(parts)
+
+
+def _named(frame: pl.DataFrame) -> pl.DataFrame:
+    """The frame with each ``bim_crs`` value as the name of its CRS, for a text display."""
+    if CRS_COLUMN not in frame.columns:
+        return frame
+    names = {text: _crs_of(text).name for text in _texts(frame[CRS_COLUMN])}
+    return frame.with_columns(pl.col(CRS_COLUMN).cast(pl.String).replace(names))
+
+
+def _display_formats(frame: pl.DataFrame) -> dict[str, Callable[[Any], str | None]]:
+    """The ``format_mapping`` of marimo's table: CRS names for ``bim_crs``, WKT for WKB."""
+    formats: dict[str, Callable[[Any], str | None]] = {}
+    if CRS_COLUMN in frame.columns:
+        formats[CRS_COLUMN] = _crs_name
+    for name in GEOMETRY_COLUMNS:
+        if frame.schema.get(name) == pl.Binary:
+            # geog is in degrees, where the seventh decimal is about a centimetre
+            precision = 7 if name == GEOG_COLUMN else 3
+            formats[name] = functools.partial(_wkt, precision=precision)
+    return formats
+
+
+def _crs_name(text: str | None) -> str | None:
+    """The name of the CRS of a ``bim_crs`` value, for a display."""
+    return None if text is None else _crs_of(text).name
+
+
+def _wkt(wkb: bytes | None, *, precision: int) -> str | None:
+    """The start of a WKB geometry's WKT, for a display."""
+    if wkb is None:
+        return None
+    geometry = shapely.from_wkb(wkb, on_invalid="ignore")
+    if geometry is None:
+        return "(not WKB)"
+    text = shapely.to_wkt(geometry, rounding_precision=precision)
+    return text if len(text) <= _WKT_LENGTH else f"{text[:_WKT_LENGTH]}…"
 
 
 def _label(frame: pl.DataFrame) -> str:
