@@ -52,7 +52,7 @@ def test_import_bimpolars_is_all_a_notebook_needs() -> None:
     """Georeferencing and the test data are on the package itself, without more imports."""
     code = (
         "import bimpolars as bpl\n"
-        "print(bpl.derived_engineering_crs.__module__, bpl.set_crs.__module__,"
+        "print(bpl.site_crs.__module__, bpl.set_crs.__module__,"
         " bpl.to_crs.__module__, bpl.with_geog.__module__, bpl.data.fetch.__module__)"
     )
     result = subprocess.run(

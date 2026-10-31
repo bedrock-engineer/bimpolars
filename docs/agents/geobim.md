@@ -1,6 +1,6 @@
 # Georeferencing: CRSs, PROJ, to_crs and geog
 
-`src/bimpolars/geobim.py` georeferences a model: `derived_engineering_crs`, `set_crs`, `to_crs`,
+`src/bimpolars/geobim.py` georeferences a model: `site_crs`, `set_crs`, `to_crs`,
 `with_geog`, `affine_transformation` and `linearized_site_to_ecef`, all exported at the top
 level too. pyproj is a core dependency: every CRS argument goes through `crs.resolve_crs`, and
 a model stores its CRS as PROJJSON (`src/bimpolars/crs.py`).
