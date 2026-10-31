@@ -6,7 +6,7 @@ plane it bears on, anything else to its footprint at the height of its centre of
 :func:`bimpolars.simple_features` with ``lightbim=True`` adds that reduction next to the
 footprint, in the three columns of :data:`LIGHTBIM_COLUMNS`:
 
-- ``lightbim``: the reduction as ISO WKB with Z in the model CRS (:data:`LIGHTBIM_DTYPE`): a
+- ``lightbim``: the reduction as ISO WKB with Z in the BIM CRS (:data:`LIGHTBIM_DTYPE`): a
   ``LINESTRING Z`` for a curve member, a ``POLYGON Z`` or ``MULTIPOLYGON Z`` for the others.
 - ``lightbim_kind`` (:data:`KIND_DTYPE`): ``member`` (curve, surface, support or mass, which
   sets the geometry), ``role`` (beam, column, brace, pile, slab, wall, plate, roof, footing,
@@ -41,7 +41,7 @@ import polars as pl
 import shapely
 
 from bimpolars.features import _clamp_xy, plan_outline
-from bimpolars.frame import NATIVE_GEOM_DTYPE, BimDataFrame
+from bimpolars.frame import NATIVE_GEOM_DTYPE, BimDataFrame, as_bim_dataframe
 from bimpolars.mesh import mesh_arrays
 from bimpolars.properties import ATTRIBUTES_PSET
 
@@ -172,7 +172,9 @@ line (a pile exported as a footing) becomes a ``curve`` with the role ``pile``; 
 """
 
 
-def lightbim_features(bdf: BimDataFrame, *, kind: pl.Expr | None = None) -> pl.DataFrame:
+def lightbim_features(
+    bdf: BimDataFrame | pl.DataFrame, *, kind: pl.Expr | None = None
+) -> pl.DataFrame:
     """The LightBIM columns of a frame that has its footprints.
 
     Args:
@@ -201,7 +203,7 @@ def lightbim_features(bdf: BimDataFrame, *, kind: pl.Expr | None = None) -> pl.D
         TypeError: If ``kind`` evaluates to something other than a Struct or a String, or
             ``native_geom`` has values of another layout than :data:`bimpolars.NATIVE_GEOM_DTYPE`.
     """
-    frame = bdf.frame
+    frame = as_bim_dataframe(bdf).frame
     missing = [column for column in _REQUIRED_COLUMNS if column not in frame.columns]
     if missing:
         raise ValueError(f"the LightBIM reduction needs the columns {', '.join(missing)}")

@@ -1,12 +1,14 @@
 """Building Information Models in polars DataFrames with geometry columns.
 
 A :class:`BimDataFrame` holds one BIM model: a polars DataFrame with one row per element and
-one model CRS, stored as PROJJSON and read as a ``pyproj.CRS``. :func:`read_ifc` fills it from
+the BIM CRS of their geometry in its ``bim_crs`` column, as PROJJSON text, read as a
+``pyproj.CRS``. Polars methods work on it directly, and :func:`concat` stacks models.
+:func:`read_ifc` fills it from
 an IFC file and :func:`read_speckle` from the v3 objects of a Speckle version
 (:func:`version_objects`), :func:`simple_features` adds the plan footprint of every element,
 :func:`element_meshes_glb` writes the meshes as glTF, and :func:`read_parquet` reads a model
 back from the (Geo)Parquet that :meth:`BimDataFrame.write_parquet` wrote.
-:func:`site_crs`, :func:`set_crs`, :func:`to_crs` and :func:`with_geog` (from
+:func:`georeferenced_bim_crs`, :func:`set_crs`, :func:`to_crs` and :func:`with_geog` (from
 :mod:`bimpolars.geobim`) georeference a model, and :mod:`bimpolars.data` fetches the test
 models.
 
@@ -26,13 +28,14 @@ from bimpolars.frame import (
     STYLE_DTYPE,
     SWEEP_DTYPE,
     BimDataFrame,
+    concat,
     read_parquet,
 )
 from bimpolars.geobim import (
     affine_transformation,
+    georeferenced_bim_crs,
     linearized_site_to_ecef,
     set_crs,
-    site_crs,
     to_crs,
     with_geog,
 )
@@ -59,9 +62,11 @@ __all__ = [
     "CRSLike",
     "LinearUnit",
     "affine_transformation",
+    "concat",
     "data",
     "element_meshes_glb",
     "engineering_crs",
+    "georeferenced_bim_crs",
     "linearized_site_to_ecef",
     "plan_outline",
     "properties_series",
@@ -70,7 +75,6 @@ __all__ = [
     "read_speckle",
     "set_crs",
     "simple_features",
-    "site_crs",
     "to_crs",
     "triangles_glb",
     "version_objects",

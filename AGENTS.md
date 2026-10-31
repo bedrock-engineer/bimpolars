@@ -1,10 +1,11 @@
 # bimpolars
 
 Building Information Models in polars DataFrames with geometry columns: a `BimDataFrame` has
-one row per element and one model CRS, stored as PROJJSON (`bdf.projjson`) and handed out as a
-`pyproj.CRS` (`bdf.crs`). Readers (`read_ifc`, `read_speckle`) build
-it; `simple_features`, `bimpolars.geobim`, `bimpolars.gltf` and GeoParquet take it further. The
-README lists the public functions: keep that list current when you add one.
+one row per element and the BIM CRS of its geometry in a `bim_crs` column of PROJJSON text,
+handed out as a `pyproj.CRS` (`bdf.crs`) and as PROJJSON (`bdf.projjson`). Readers
+(`read_ifc`, `read_speckle`) build it; `simple_features`, `bimpolars.geobim`, `bimpolars.gltf`
+and GeoParquet take it further. The README lists the public functions: keep that list current
+when you add one.
 
 ## Checks
 
@@ -35,10 +36,11 @@ Tests that read a model of hundreds of MB are marked `slow` and run only with
   `tests/test_speckle.py::test_the_core_imports_without_specklepy`.
 - pyproj and shapely are core dependencies (#31). A CRS goes in in any form pyproj reads
   (`crs.CRSLike`, read with `crs.resolve_crs`; a `unit=` also takes a BimDataFrame, through
-  `crs.as_linear_unit`) and is stored as PROJJSON (`src/bimpolars/crs.py`), which the
-  GeoParquet and glTF metadata carry: code that writes or compares the stored CRS uses
-  `bdf.projjson`, code that asks PROJ uses `bdf.crs`. CRSs handed back to the user
-  (`bdf.crs`, `site_crs`) are `pyproj.CRS`; the PROJJSON builders
+  `crs.as_linear_unit`) and is stored as PROJJSON text in the `bim_crs` column, the one
+  source of truth ([frame.md](docs/agents/frame.md)), which the GeoParquet and glTF metadata
+  carry: code that writes or compares the stored CRS uses `bdf.projjson`, code that asks PROJ
+  uses `bdf.crs`. CRSs handed back to the user
+  (`bdf.crs`, `georeferenced_bim_crs`) are `pyproj.CRS`; the PROJJSON builders
   `engineering_crs` and `CRS84H` stay PROJJSON. The geobim functions and `bimpolars.data` are
   on the package itself, so `import bimpolars as bpl` is all a notebook needs.
 - The Pages site (`.github/workflows/pages.yml`) is specklestuff's demo page (its `site/`),
@@ -51,8 +53,8 @@ Tests that read a model of hundreds of MB are marked `slow` and run only with
 
 Read the doc of an area before you change its code or write its tests:
 
-- [The frame](docs/agents/frame.md): rows and columns, openings and `container`, property
-  dtypes, the `mesh` column.
+- [The frame](docs/agents/frame.md): rows and columns, the `bim_crs` column, openings and
+  `container`, property dtypes, the `mesh` column.
 - [read_ifc](docs/agents/ifc.md): the `attributes` set and the `native_geom` sweeps.
 - [Speckle](docs/agents/speckle.md): `read_speckle`, bundles and `bundle_objects`.
 - [Footprints and GeoParquet](docs/agents/features.md): `simple_features`, `plan_outline`, the

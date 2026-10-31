@@ -188,7 +188,7 @@ def test_write_parquet_writes_geoparquet(small: BimDataFrame, tmp_path: Path) ->
     small.write_parquet(path)
     metadata = pl.read_parquet_metadata(path)
     assert json.loads(metadata[GEO_METADATA_KEY]) == geo_metadata(small.frame, small.projjson)
-    assert json.loads(metadata[METADATA_KEY])["crs"] == small.projjson
+    assert json.loads(metadata[METADATA_KEY]) == {"version": 2}
     back = read_parquet(path)
     assert back.equals(small)
     assert back.frame.schema["footprint"] == pl.Binary

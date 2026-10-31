@@ -1,4 +1,4 @@
-"""bimpolars.geobim: the site CRS, set_crs and to_crs, on synthetic models and
+"""bimpolars.geobim: the georeferenced BIM CRS, set_crs and to_crs, on synthetic models and
 on the Sixty5 structural model georeferenced as in the Sixty5 GeoBIM notebook."""
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from bimpolars import (
     MESH_DTYPE,
     NATIVE_GEOM_DTYPE,
     BimDataFrame,
+    concat,
     read_parquet,
     simple_features,
 )
@@ -30,9 +31,9 @@ from bimpolars.geobim import (
     AFFINE_TOLERANCE,
     WKB_COLUMNS,
     affine_transformation,
+    georeferenced_bim_crs,
     linearized_site_to_ecef,
     set_crs,
-    site_crs,
     to_crs,
     with_geog,
 )
@@ -65,7 +66,7 @@ class Site(NamedTuple):
 
     def crs(self) -> pyproj.CRS:
         unit = {0.001: "millimetre", 1.0: "metre"}[self.unit]
-        return site_crs(
+        return georeferenced_bim_crs(
             "EPSG:7415",
             self.easting,
             self.northing,
@@ -172,7 +173,7 @@ def column_model(footprint: shapely.Polygon | None = None) -> BimDataFrame:
     return bdf.with_frame(bdf.frame.with_columns(column))
 
 
-def test_site_crs_is_a_compound_of_two_derived_crss() -> None:
+def test_georeferenced_bim_crs_is_a_compound_of_two_derived_crss() -> None:
     parsed = SIXTY5.crs()
     assert parsed.type_name == "Compound CRS"
     assert [axis.unit_name for axis in parsed.axis_info] == ["millimetre"] * 3
@@ -180,7 +181,7 @@ def test_site_crs_is_a_compound_of_two_derived_crss() -> None:
 
     crs = parsed.to_json_dict()
     assert crs["type"] == "CompoundCRS"
-    assert crs["name"] == "Sixty5 site CRS"
+    assert crs["name"] == "Sixty5 georeferenced BIM CRS"
     grid, height = crs["components"]
     assert grid["type"] == "DerivedProjectedCRS"
     assert grid["base_crs"]["id"] == {"authority": "EPSG", "code": 28992}
@@ -200,19 +201,19 @@ def test_site_crs_is_a_compound_of_two_derived_crss() -> None:
     json.dumps(crs)
 
 
-def test_site_crs_takes_the_unit_of_the_model() -> None:
+def test_georeferenced_bim_crs_takes_the_unit_of_the_model() -> None:
     """``unit=bdf`` gives the site the model's own unit, as a name or another CRS would."""
     sixty5 = SIXTY5._replace(name="Site")
     in_millimetres = sixty5.crs()
     args = ("EPSG:7415", sixty5.easting, sixty5.northing, sixty5.orthometric_height)
     for unit in (plain_column_model(), in_millimetres, in_millimetres.to_json_dict()):
-        assert site_crs(*args, sixty5.rotation, unit=unit) == in_millimetres
-    in_metres = site_crs(*args, sixty5.rotation, unit="EPSG:7415")
+        assert georeferenced_bim_crs(*args, sixty5.rotation, unit=unit) == in_millimetres
+    in_metres = georeferenced_bim_crs(*args, sixty5.rotation, unit="EPSG:7415")
     assert in_metres.axis_info[0].unit_name == "metre"
 
 
 @pytest.mark.parametrize("site", SITES)
-def test_site_crs_reproduces_the_notebook_transform(site: Site) -> None:
+def test_georeferenced_bim_crs_reproduces_the_notebook_transform(site: Site) -> None:
     to_rd = pyproj.Transformer.from_crs(site.crs(), "EPSG:7415", always_xy=True)
     moved = np.column_stack(to_rd.transform(*SITE_POINTS.T))
     assert np.abs(moved - site.to_rd(SITE_POINTS)).max() < 1e-6
@@ -225,25 +226,26 @@ def test_site_crs_reproduces_the_notebook_transform(site: Site) -> None:
     assert np.abs(back - SITE_POINTS).max() < 1e-6 / site.unit
 
 
-def test_site_crs_checks_its_arguments() -> None:
+def test_georeferenced_bim_crs_checks_its_arguments() -> None:
     with pytest.raises(ValueError, match="'Amersfoort / RD New' is a Projected CRS"):
-        site_crs("EPSG:28992", 0, 0, 0, 0, unit="metre")
+        georeferenced_bim_crs("EPSG:28992", 0, 0, 0, 0, unit="metre")
     with pytest.raises(ValueError, match="'ETRS89' is a Geographic 3D CRS"):
-        site_crs("EPSG:4937", 0, 0, 0, 0, unit="metre")
+        georeferenced_bim_crs("EPSG:4937", 0, 0, 0, 0, unit="metre")
     with pytest.raises(ValueError, match="Compound CRS of a Geographic 2D CRS and a Vertical CRS"):
-        site_crs("EPSG:9518", 0, 0, 0, 0, unit="metre")  # WGS 84 + EGM2008 height
+        georeferenced_bim_crs("EPSG:9518", 0, 0, 0, 0, unit="metre")  # WGS 84 + EGM2008 height
     with pytest.raises(ValueError, match="of a Derived Projected CRS and a Derived Vertical CRS"):
-        site_crs(SIXTY5.crs(), 0, 0, 0, 0, unit="metre")  # a site is no map
+        georeferenced_bim_crs(SIXTY5.crs(), 0, 0, 0, 0, unit="metre")  # a site is no map
     with pytest.raises(ValueError, match="unknown unit"):
-        site_crs("EPSG:7415", 0, 0, 0, 0, unit="furlong")
+        georeferenced_bim_crs("EPSG:7415", 0, 0, 0, 0, unit="furlong")
     with pytest.raises(ValueError, match="cannot read"):
-        site_crs("not a crs", 0, 0, 0, 0, unit="metre")
+        georeferenced_bim_crs("not a crs", 0, 0, 0, 0, unit="metre")
 
 
 def test_set_crs_labels_without_moving() -> None:
     bdf = plain_column_model()
     labelled = set_crs(bdf, SIXTY5.crs())
-    assert labelled.frame is bdf.frame
+    assert labelled.frame.drop("bim_crs").equals(bdf.frame.drop("bim_crs"))
+    assert labelled.frame.columns == bdf.frame.columns
     assert labelled.crs == SIXTY5.crs()
     assert bdf.projjson["type"] == "EngineeringCRS"
 
@@ -254,6 +256,30 @@ def test_set_crs_labels_without_moving() -> None:
         set_crs(bdf, "EPSG:28992")
     with pytest.raises(ValueError, match="cannot read"):
         set_crs(bdf, "not a crs")
+
+
+def test_set_crs_declares_one_crs_on_a_frame_of_several() -> None:
+    mixed = concat([plain_column_model(), column_model()])
+    declared = set_crs(mixed, SIXTY5.crs())
+    assert declared.crs == SIXTY5.crs()
+    assert declared.frame["bim_crs"].n_unique() == 1
+
+
+def test_to_crs_refuses_a_frame_of_several_crss() -> None:
+    """One transformation for rows in two CRSs would misplace one of them."""
+    site = column_model(COLUMN_FOOTPRINT)
+    rd = to_crs(site, "EPSG:7415")
+    mixed = concat([site, rd])
+    with pytest.raises(ValueError, match=r"2 CRSs: 'Sixty5 georeferenced BIM CRS'.*group_by"):
+        to_crs(mixed, "EPSG:7415")
+    with pytest.raises(ValueError, match="2 CRSs"):
+        with_geog(mixed)
+    # Moved one CRS at a time, both halves land where the site's rows land
+    by_crs = mixed.group_by("bim_crs", maintain_order=True)
+    parts = [to_crs(part, "EPSG:7415") for _, part in by_crs]
+    moved = concat(parts)
+    assert moved.crs == rd.crs
+    np.testing.assert_allclose(vertices(moved), np.vstack([vertices(rd)] * 2), atol=1e-9)
 
 
 def test_to_crs_moves_the_geometry_columns_together() -> None:
@@ -861,6 +887,29 @@ def test_to_crs_leaves_geog_as_it_is() -> None:
     assert geographic.frame["geog"].equals(placed.frame["geog"])
     moved = coordinates(footprints(geographic)[3])
     assert np.abs(moved - coordinates(geogs(placed)[3])).max() < 1e-9
+
+
+def test_a_model_without_rows_moves_without_a_crs() -> None:
+    none = column_model(COLUMN_FOOTPRINT).head(0)
+    assert len(to_crs(none, "EPSG:7415")) == 0
+    geog = with_geog(none)
+    assert len(geog) == 0
+    assert geog.frame.schema["geog"] == pl.Binary
+    with pytest.raises(ValueError, match="three"):
+        to_crs(none, "EPSG:28992")
+
+
+@pytest.mark.filterwarnings("ignore:the best transformation")
+def test_a_web_map_of_models_in_two_crss_is_geoparquet(tmp_path) -> None:
+    """geog is in OGC:CRS84h on every row, so writing it needs no single BIM CRS."""
+    site = with_geog(column_model(COLUMN_FOOTPRINT))
+    web = concat([site, to_crs(site, "EPSG:7415")]).drop("footprint")
+    path = tmp_path / "web.parquet"
+    web.write_parquet(path)
+    geo = json.loads(pl.read_parquet_metadata(path)[GEO_METADATA_KEY])
+    assert list(geo["columns"]) == ["geog"]
+    with pytest.raises(ValueError, match="2 CRSs"):
+        concat([site, to_crs(site, "EPSG:7415")]).write_parquet(tmp_path / "both.parquet")
 
 
 @pytest.mark.filterwarnings("ignore:the best transformation")

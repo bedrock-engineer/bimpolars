@@ -3,8 +3,8 @@
 A BIM model lives in its own Cartesian coordinates. Until it is georeferenced, that is a plain
 `EngineeringCRS <https://proj.org/en/stable/specifications/projjson.html>`_: three axes in the
 model's length unit, without a relation to the earth. A :class:`bimpolars.BimDataFrame` stores
-its CRS as a PROJJSON ``dict``, which is what goes into the GeoParquet and glTF metadata; a CRS
-goes in in any form pyproj reads (:data:`CRSLike`).
+its CRS as PROJJSON text in its ``bim_crs`` column, which is what goes into the GeoParquet and
+glTF metadata; a CRS goes in in any form pyproj reads (:data:`CRSLike`).
 """
 
 from __future__ import annotations

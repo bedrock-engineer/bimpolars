@@ -3,22 +3,23 @@
 Building Information Models in polars DataFrames with geometry columns.
 
 A `BimDataFrame` is one BIM model: a [polars](https://pola.rs) DataFrame with one row per
-element, with or without geometry, and one model coordinate reference system stored as
-[PROJJSON](https://proj.org/en/stable/specifications/projjson.html). Meshes and bounding boxes
-are plain nested columns and footprints are WKB, so the whole model filters, joins and
-aggregates like any other DataFrame and round-trips through Parquet, as GeoParquet once it has
-footprints.
+element, with or without geometry, and the coordinate reference system of that geometry, the
+BIM CRS, in a `bim_crs` column of
+[PROJJSON](https://proj.org/en/stable/specifications/projjson.html) text. Meshes and bounding
+boxes are plain nested columns and footprints are WKB, so the whole model filters, joins and
+aggregates like any other DataFrame, keeps its CRS while it does, and round-trips through
+Parquet, as GeoParquet once it has footprints.
 
 ```python
 import polars as pl
 import bimpolars
 
 bdf = bimpolars.read_ifc("sixty5_O-S1-CON-structural-engineering.ifc")
-bdf.frame.schema
+bdf.schema
 # id: String, name: String, class: Categorical, properties: Struct, container: String,
-# elevation: Float64, native_geom: List(Struct), mesh: Struct, bbox: Struct
+# elevation: Float64, native_geom: List(Struct), mesh: Struct, bbox: Struct, bim_crs: Categorical
 
-columns = bdf.frame.filter(pl.col("class") == "IfcColumn")
+columns = bdf.filter(pl.col("class") == "IfcColumn")  # a BimDataFrame, CRS and all
 columns.select(
     "id",
     "name",
@@ -27,15 +28,15 @@ columns.select(
 )
 
 # Outline the elements, not the voids of the openings; the storeys stay to place the footprints
-elements = bdf.frame.filter(pl.col("class") != "IfcOpeningElement")
-bdf = bimpolars.simple_features(bdf.with_frame(elements))
-bdf.frame.schema  # + footprint_ref: String, footprint: Binary (ISO WKB)
+elements = bdf.filter(pl.col("class") != "IfcOpeningElement")
+bdf = bimpolars.simple_features(elements)
+bdf.schema  # + footprint_ref: String, footprint: Binary (ISO WKB)
 bdf.write_parquet("sixty5.parquet")  # GeoParquet: footprint is the primary geometry
 bimpolars.read_parquet("sixty5.parquet").equals(bdf)  # True, CRS included
 
 # The structural-analysis model: beams and columns as lines, slabs and walls as midplanes
 analysis = bimpolars.simple_features(bdf, lightbim=True)
-analysis.frame.select("id", "lightbim", "lightbim_kind", "lightbim_qa")
+analysis.select("id", "lightbim", "lightbim_kind", "lightbim_qa")
 
 from pathlib import Path
 
@@ -49,7 +50,7 @@ geopandas.read_parquet("sixty5.parquet", columns=["id", "class", "footprint"]).c
 
 The demo page, [bedrock-engineer.github.io/bimpolars](https://bedrock-engineer.github.io/bimpolars/),
 shows the Sixty5 structural model read with `read_ifc` and placed on earth with
-`site_crs` in [specklewidgets](https://github.com/bedrock-engineer/specklestuff)'
+`georeferenced_bim_crs` in [specklewidgets](https://github.com/bedrock-engineer/specklestuff)'
 GeoSpeckleViewer, among PDOK's 3D BAG, beside a map of the clicked element's footprint (its
 `geog`). The page is built from specklestuff's `site/` (`.github/workflows/pages.yml`).
 
@@ -68,9 +69,21 @@ objects needs no specklepy; building those objects from a Speckle bundle does, a
 extra `[speckle]` (see [Speckle](#speckle)).
 
 A CRS goes in in any form pyproj reads: PROJJSON, a `pyproj.CRS`, `"EPSG:7415"`, an EPSG code
-or WKT (`bimpolars.CRSLike`). A `BimDataFrame` stores it as PROJJSON (`bdf.projjson`), which
-is what its GeoParquet and glTF metadata carry, and hands it out as a `pyproj.CRS` (`bdf.crs`),
-like `GeoDataFrame.crs`.
+or WKT (`bimpolars.CRSLike`). A `BimDataFrame` stores it as PROJJSON text in its `bim_crs`
+column, the same value on every row of one model, which is what its GeoParquet and glTF
+metadata carry, and hands it out as a `pyproj.CRS` (`bdf.crs`), like `GeoDataFrame.crs`, and
+as a PROJJSON dict (`bdf.projjson`). `bim_crs` covers the BIM geometry columns (`mesh`,
+`bbox`, `native_geom`, `footprint`, `lightbim`), not `geog`, which is always OGC:CRS84h.
+
+Since the CRS travels with the rows, polars works on the BimDataFrame itself: `bdf.filter(...)`,
+`bdf.join(...)` and `bdf.with_columns(...)` give a BimDataFrame, `bdf["id"]` is the Series,
+`"id" in bdf` and `for column in bdf` go over the columns, and `pl.DataFrame(bdf)` and DuckDB
+read it through the Arrow stream. The bimpolars functions also take the plain polars frames
+that `bdf.pipe(...)` and a `group_by` loop hand out, as long as they kept `bim_crs`.
+`bimpolars.concat(bdfs)` stacks models, every row keeping its own CRS; a frame whose rows are
+in more than one CRS, or that has no rows, has no `bdf.crs` (it raises and says why) and
+`to_crs` refuses it. A notebook shows each row's CRS by its name in the `bim_crs` column and
+the WKB columns as WKT, display only; `mo.ui.table(bdf)` works too, with the raw values.
 
 ## Functions
 
@@ -88,7 +101,7 @@ like `GeoDataFrame.crs`.
     for ports); `elevation`: the storey's level in model coordinates.
   - `native_geom` (`NATIVE_GEOM_DTYPE`): the extruded solids (`IfcExtrudedAreaSolid`) of the
     body, mapped items resolved and both operands of a union kept, as a list of sweeps:
-    `placement` (a row-major 4x4 matrix from the sweep's coordinates to the model CRS),
+    `placement` (a row-major 4x4 matrix from the sweep's coordinates to the BIM CRS),
     `profile` (a 2D WKB polygon with its voids), `profile_type`, `profile_name`, `depth`,
     `direction` and `clipped` (the IFC cut the solid afterwards, by a difference or an
     intersection). Breps and other solids are left out, so a list can describe part of a body;
@@ -110,7 +123,7 @@ like `GeoDataFrame.crs`.
     itself at the lowest z of its mesh.
   Every row's `container` must be in the frame: filter the elements, but keep the spatial
   rows, or `simple_features` raises. Decode the column with
-  `shapely.from_wkb(bdf.frame["footprint"].to_numpy())`.
+  `shapely.from_wkb(bdf["footprint"].to_numpy())`.
 - `bimpolars.lightbim.lightbim_features(bdf, *, kind=None)`: the LightBIM columns on their own,
   for a frame that has its footprints. The class table is `bimpolars.lightbim.CLASSES`.
 - `plan_outline(vertices, faces)`: the plan outline of one triangle mesh as a 2D shapely
@@ -122,11 +135,17 @@ like `GeoDataFrame.crs`.
   the `IfcOpeningElement` rows. See [glTF](#gltf).
 - `triangles_glb(groups)`: any triangles in metres, z up, as flat-shaded binary glTF: per
   material name an `(n, 3, 3)` array of corners and an RGB or RGBA colour in 0..1.
-- `BimDataFrame(frame, crs)`: the thin wrapper, with the CRS in any form, with `.frame`,
-  `.crs` (a `pyproj.CRS`), `.projjson`, `.with_frame()`,
-  `.equals()`, `.write_parquet()` and `BimDataFrame.read_parquet()`.
-- `read_parquet(source)`: reads a `BimDataFrame` back, CRS included. The CRS sits under the
-  `bimpolars` key of the Parquet file metadata as `{"version": 1, "crs": <PROJJSON>}`.
+- `BimDataFrame(frame, crs=None)`: the wrapper of a frame with a `bim_crs` column, or of one
+  without it and a CRS in any form, which becomes the column. It has `.frame`, `.crs` (a
+  `pyproj.CRS`), `.projjson`, `.with_frame()` (a frame without `bim_crs` in this model's CRS),
+  `.equals()`, `.write_parquet()` and `BimDataFrame.read_parquet()`, and every polars
+  DataFrame method.
+- `concat(bdfs, *, how="vertical")`: stacks BimDataFrames (or polars frames with `bim_crs`)
+  like `pl.concat`, every row keeping its CRS (`how` is `"vertical"`, `"diagonal"` or their
+  `_relaxed` variants).
+- `read_parquet(source)`: reads a `BimDataFrame` back, CRS included: it is the `bim_crs`
+  column. The `bimpolars` key of the Parquet file metadata holds the layout version,
+  `{"version": 2}`; a file of version 1, which kept the CRS there, gets the column on read.
 - `engineering_crs(name, *, unit, datum)`: a plain EngineeringCRS as PROJJSON in a given
   length unit (a known name, a `LinearUnit(name, conversion_factor)`, or a CRS or a model whose
   unit it copies), which a model without georeferencing gets. `bdf.crs.axis_info[0].unit_name`
@@ -171,8 +190,10 @@ import bimpolars as bpl
 bdf = bpl.simple_features(bpl.read_ifc("sixty5.ifc"))
 # Sixty5: the site origin at RD New (160071.5, 384156.5), NAP +18.625 m, the site's y-axis
 # 50.36 degrees clockwise from grid north, in the model's own unit (millimetres)
-crs = bpl.site_crs("EPSG:7415", 160071.5, 384156.5, 18.625, -50.36, unit=bdf, name="Sixty5")
-site = bpl.set_crs(bdf, crs)  # the same geometry, now in a georeferenced site CRS
+crs = bpl.georeferenced_bim_crs(
+    "EPSG:7415", 160071.5, 384156.5, 18.625, -50.36, unit=bdf, name="Sixty5"
+)
+site = bpl.set_crs(bdf, crs)  # the same geometry, now in a georeferenced BIM CRS
 rd = bpl.to_crs(site, "EPSG:7415")  # meshes, footprints, bbox and levels in RD New + NAP metres
 rd.write_parquet("sixty5_rd.parquet")  # GeoParquet with EPSG:7415
 geographic = bpl.to_crs(site, "OGC:CRS84h")  # the whole model in lon, lat, ellipsoidal height
@@ -182,33 +203,36 @@ site.write_parquet("sixty5_geog.parquet")  # GeoParquet with geog as the primary
 geopandas.read_parquet("sixty5_geog.parquet", columns=["id", "class", "geog"]).to_json()  # GeoJSON
 ```
 
-- `site_crs(compound_crs, easting, northing, orthometric_height, rotation, *, unit, name)`: the
-  CRS of a site as a `pyproj.CRS`, derived from a compound of a projected and a vertical CRS
-  such as EPSG:7415 (RD New + NAP height); any other CRS raises a `ValueError` that names what
-  it got. The site CRS is a compound of a DerivedProjectedCRS with an Affine parametric
-  transformation (EPSG:9624) and a DerivedVerticalCRS with a Vertical Offset (EPSG:9616), with
-  the axes in the site's `unit` (`unit=bdf` copies the model's); it keeps the datums of
-  `compound_crs`, so in ISO 19111 terms it is not an EngineeringCRS. The site origin lands on
-  `(easting, northing, orthometric_height)` and the site's y-axis points `rotation` degrees
-  counterclockwise from grid north (for an IfcMapConversion:
-  `degrees(atan2(XAxisOrdinate, XAxisAbscissa))`). PROJ then chains site → compound → anything.
-- `set_crs(bdf, crs)`: labels the model with a CRS (PROJJSON, a `pyproj.CRS` or user input such
-  as `"EPSG:7415"`) without moving the geometry, like `GeoDataFrame.set_crs`. The CRS must have
-  three axes.
+- `georeferenced_bim_crs(compound_crs, easting, northing, orthometric_height, rotation, *,
+  unit, name)`: a BIM CRS placed on a compound CRS of a projected and a vertical CRS such as
+  EPSG:7415 (RD New + NAP height), as a `pyproj.CRS` named `f"{name} georeferenced BIM CRS"`;
+  any other CRS raises a `ValueError` that names what it got. It is a compound of a
+  DerivedProjectedCRS with an Affine parametric transformation (EPSG:9624) and a
+  DerivedVerticalCRS with a Vertical Offset (EPSG:9616), with the axes in the model's `unit`
+  (`unit=bdf` copies it); it keeps the datums of `compound_crs`, so in ISO 19111 terms it is
+  not an EngineeringCRS. The site origin lands on `(easting, northing, orthometric_height)`
+  and the model's y-axis points `rotation` degrees counterclockwise from grid north (for an
+  IfcMapConversion: `degrees(atan2(XAxisOrdinate, XAxisAbscissa))`). PROJ then chains BIM CRS
+  → compound CRS → anything.
+- `set_crs(bdf, crs)`: declares the CRS the coordinates are in (PROJJSON, a `pyproj.CRS` or
+  user input such as `"EPSG:7415"`): it rewrites `bim_crs` and leaves the geometry alone, like
+  `GeoDataFrame.set_crs`. The CRS must have three axes.
 - `to_crs(bdf, crs)`: moves the model to another CRS with one pyproj transformation, like
-  `GeoDataFrame.to_crs`: the `mesh` vertices, the WKB columns in the model CRS (`footprint`
+  `GeoDataFrame.to_crs`: the `mesh` vertices, the WKB columns in the BIM CRS (`footprint`
   and `lightbim`; never `geog`) and the storey `elevation`s (at the plan centre of the
   model) move together, `bbox` is recomputed from the moved meshes (from the moved corners of
   the old `bbox` when the frame has no `mesh` column) and the footprints are kept inside it.
   The target must have three axes, so that the meshes keep one unit per axis: `"EPSG:7415"`,
   not `"EPSG:28992"`.
   `native_geom` keeps its sweeps only under an affine transformation (to the `compound_crs`
-  of a site CRS, for instance): the matrix is composed onto each sweep's `placement`, scale
-  included, and the profile and depth stay in the sweep's own unit. A geographic, geocentric or
+  of a georeferenced BIM CRS, for instance): the matrix is composed onto each sweep's
+  `placement`, scale included, and the profile and depth stay in the sweep's own unit. A geographic, geocentric or
   differently projected target nulls it. `lightbim_qa.deviation`, a length, is scaled by the
   same matrix into the target's unit (1500 mm becomes 1.5 m in EPSG:7415), and nulled when the
   transformation is not affine. A derived CRS is passed through its base CRS, because PROJ
-  otherwise applies a 3D Helmert transformation to heights still in the site's unit.
+  otherwise applies a 3D Helmert transformation to heights still in the model's unit. A frame
+  whose `bim_crs` holds more than one CRS is refused; move each CRS's rows on their own (for
+  example over `bdf.group_by("bim_crs")`).
 - `with_geog(bdf)`: adds `geog`, the `footprint` of every row in OGC:CRS84h (longitude and
   latitude in degrees, ellipsoidal height in metres on WGS 84: `bimpolars.crs.CRS84H`), as
   ISO WKB, null exactly when `footprint` is. That is the CRS GeoJSON means by its coordinates,
@@ -235,7 +259,7 @@ transformation that is good to about a metre, and passes NAP heights off as elli
 `write_parquet` on a frame with a `geog`, `footprint` or `lightbim` column writes
 [GeoParquet 1.1](https://geoparquet.org): the file metadata gets a `geo` entry
 (`bimpolars.geoparquet.geo_metadata`) that lists each of them WKB encoded with its geometry
-types and its CRS as PROJJSON: `footprint` in the model CRS, `geog` in OGC:CRS84h. The first
+types and its CRS as PROJJSON: `footprint` in the BIM CRS, `geog` in OGC:CRS84h. The first
 one present is the primary geometry column (`bimpolars.geoparquet.GEOMETRY_COLUMNS`): `geog`
 when `with_geog` added it, so that a reader that takes the primary column has longitude and
 latitude, else `footprint`. When the frame has its `bbox` column, the entry also names that
@@ -261,7 +285,7 @@ SELECT id, ST_Area(footprint) FROM read_parquet('sixty5.parquet') WHERE bbox.xma
 
 `lightbim` is a GeoParquet geometry column too, listed after `footprint` with the same CRS and
 covering: every reduction lies within its row's `bbox`. `mesh` and `native_geom` are not GeoParquet
-geometries; they share the model CRS implicitly.
+geometries; they share the BIM CRS of `bim_crs`.
 
 ## LightBIM
 
@@ -270,14 +294,14 @@ does, next to its footprint:
 
 ```python
 bdf = bimpolars.simple_features(bimpolars.read_ifc("sixty5.ifc"), lightbim=True)
-bdf.frame.select(
+bdf.select(
     "name",
     pl.col("lightbim_kind").struct.unnest(),  # member, role, load_bearing
     pl.col("lightbim_qa").struct.unnest(),  # rule, source, deviation
 )
 ```
 
-- `lightbim`: ISO WKB with Z in the model CRS. The `member` of `lightbim_kind` sets it: a
+- `lightbim`: ISO WKB with Z in the BIM CRS. The `member` of `lightbim_kind` sets it: a
   `curve` (beam, column, brace, pile) is a `LINESTRING Z` along its axis, a `surface` (slab,
   wall, plate, roof) a `POLYGON Z` on its midplane with the holes and parts of its mesh (a wall
   with windows), a `support` (footing, raft) the footprint at its bearing level (the bottom of
@@ -324,7 +348,7 @@ are read from the IFC; other bodies place their axis from the box around the mes
 ```python
 from pathlib import Path
 
-structure = bdf.with_frame(bdf.frame.filter(pl.col("class").is_in(["IfcColumn", "IfcBeam"])))
+structure = bdf.filter(pl.col("class").is_in(["IfcColumn", "IfcBeam"]))
 Path("structure.glb").write_bytes(bimpolars.element_meshes_glb(structure))
 ```
 
@@ -333,7 +357,7 @@ Path("structure.glb").write_bytes(bimpolars.element_meshes_glb(structure))
   (translucent styles get `alphaMode` BLEND). `IfcOpeningElement` rows are left out: their
   mesh is the void they cut.
 - Metres, from the model's unit (`bdf.crs.axis_info[0]`), as glTF requires. The root node
-  carries the model CRS as `extras.crs` and, next to it, `extras.unit` (`"metre"`): the CRS
+  carries the BIM CRS as `extras.crs` and, next to it, `extras.unit` (`"metre"`): the CRS
   keeps its own unit, the vertex data under the node does not.
 - The vertex data keeps the model's z-up coordinates; the root node, named after the CRS,
   rotates the scene to glTF's y-up (`bimpolars.gltf.Y_UP_ROTATION`, the 3D Tiles convention:
@@ -366,7 +390,7 @@ from bimpolars import data
 arch = data.RVT_SPECKLE_ARCH  # the Revit Advanced Sample, architecture
 objects = bimpolars.version_objects(data.fetch(data.RVT_SPECKLE_V3_OBJECTS), arch.version_id)
 bdf = bimpolars.read_speckle(objects, data.fetch_bundle(arch.bundle))
-bdf.frame.filter(pl.col("class") == "Walls").select(
+bdf.filter(pl.col("class") == "Walls").select(
     "id",
     "name",
     "container",  # the level: a row with class "Levels" and the elevation

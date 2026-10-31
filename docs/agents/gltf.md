@@ -5,7 +5,7 @@ per style) and `triangles_glb` (any triangles). It is hand-written glb 2.0, with
 in the core.
 
 - Vertices in metres (scaled by the CRS unit) and z up in the accessors.
-- A root node with `Y_UP_ROTATION` (named after the CRS; `extras.crs` is the model CRS in its
+- A root node with `Y_UP_ROTATION` (named after the CRS; `extras.crs` is the BIM CRS in its
   own unit and `extras.unit` says the data is in metres) makes the scene y-up as the spec
   wants.
 - A child node translated to the centre of the written vertices' bounding box (not the `bbox`
