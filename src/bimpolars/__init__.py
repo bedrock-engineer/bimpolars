@@ -6,7 +6,7 @@ an IFC file and :func:`read_speckle` from the v3 objects of a Speckle version
 (:func:`version_objects`), :func:`simple_features` adds the plan footprint of every element,
 :func:`element_meshes_glb` writes the meshes as glTF, and :func:`read_parquet` reads a model
 back from the (Geo)Parquet that :meth:`BimDataFrame.write_parquet` wrote.
-:func:`derived_engineering_crs`, :func:`set_crs`, :func:`to_crs` and :func:`with_geog` (from
+:func:`site_crs`, :func:`set_crs`, :func:`to_crs` and :func:`with_geog` (from
 :mod:`bimpolars.geobim`) georeference a model, and :mod:`bimpolars.data` fetches the test
 models.
 
@@ -30,9 +30,9 @@ from bimpolars.frame import (
 )
 from bimpolars.geobim import (
     affine_transformation,
-    derived_engineering_crs,
     linearized_site_to_ecef,
     set_crs,
+    site_crs,
     to_crs,
     with_geog,
 )
@@ -60,7 +60,6 @@ __all__ = [
     "LinearUnit",
     "affine_transformation",
     "data",
-    "derived_engineering_crs",
     "element_meshes_glb",
     "engineering_crs",
     "linearized_site_to_ecef",
@@ -71,6 +70,7 @@ __all__ = [
     "read_speckle",
     "set_crs",
     "simple_features",
+    "site_crs",
     "to_crs",
     "triangles_glb",
     "version_objects",

@@ -49,7 +49,7 @@ geopandas.read_parquet("sixty5.parquet", columns=["id", "class", "footprint"]).c
 
 The demo page, [bedrock-engineer.github.io/bimpolars](https://bedrock-engineer.github.io/bimpolars/),
 shows the Sixty5 structural model read with `read_ifc` and placed on earth with
-`derived_engineering_crs` in [specklewidgets](https://github.com/bedrock-engineer/specklestuff)'
+`site_crs` in [specklewidgets](https://github.com/bedrock-engineer/specklestuff)'
 GeoSpeckleViewer, among PDOK's 3D BAG, beside a map of the clicked element's footprint (its
 `geog`). The page is built from specklestuff's `site/` (`.github/workflows/pages.yml`).
 
@@ -171,10 +171,8 @@ import bimpolars as bpl
 bdf = bpl.simple_features(bpl.read_ifc("sixty5.ifc"))
 # Sixty5: the site origin at RD New (160071.5, 384156.5), NAP +18.625 m, the site's y-axis
 # 50.36 degrees clockwise from grid north, in the model's own unit (millimetres)
-crs = bpl.derived_engineering_crs(
-    "EPSG:7415", 160071.5, 384156.5, 18.625, -50.36, unit=bdf, name="Sixty5"
-)
-site = bpl.set_crs(bdf, crs)  # the same geometry, now a georeferenced Engineering CRS
+crs = bpl.site_crs("EPSG:7415", 160071.5, 384156.5, 18.625, -50.36, unit=bdf, name="Sixty5")
+site = bpl.set_crs(bdf, crs)  # the same geometry, now in a georeferenced site CRS
 rd = bpl.to_crs(site, "EPSG:7415")  # meshes, footprints, bbox and levels in RD New + NAP metres
 rd.write_parquet("sixty5_rd.parquet")  # GeoParquet with EPSG:7415
 geographic = bpl.to_crs(site, "OGC:CRS84h")  # the whole model in lon, lat, ellipsoidal height
@@ -184,14 +182,16 @@ site.write_parquet("sixty5_geog.parquet")  # GeoParquet with geog as the primary
 geopandas.read_parquet("sixty5_geog.parquet", columns=["id", "class", "geog"]).to_json()  # GeoJSON
 ```
 
-- `derived_engineering_crs(base_crs, easting, northing, orthometric_height, rotation, *, unit, name)`:
-  the Engineering CRS of a site as a `pyproj.CRS`, derived from a compound of a projected and a
-  vertical CRS such as EPSG:7415 (RD New + NAP height): a DerivedProjectedCRS with an Affine
-  parametric transformation (EPSG:9624) and a DerivedVerticalCRS with a Vertical Offset
-  (EPSG:9616), with the axes in the site's `unit` (`unit=bdf` copies the model's). The site
-  origin lands on `(easting, northing, orthometric_height)` and the site's y-axis points `rotation` degrees
+- `site_crs(compound_crs, easting, northing, orthometric_height, rotation, *, unit, name)`: the
+  CRS of a site as a `pyproj.CRS`, derived from a compound of a projected and a vertical CRS
+  such as EPSG:7415 (RD New + NAP height); any other CRS raises a `ValueError` that names what
+  it got. The site CRS is a compound of a DerivedProjectedCRS with an Affine parametric
+  transformation (EPSG:9624) and a DerivedVerticalCRS with a Vertical Offset (EPSG:9616), with
+  the axes in the site's `unit` (`unit=bdf` copies the model's); it keeps the datums of
+  `compound_crs`, so in ISO 19111 terms it is not an EngineeringCRS. The site origin lands on
+  `(easting, northing, orthometric_height)` and the site's y-axis points `rotation` degrees
   counterclockwise from grid north (for an IfcMapConversion:
-  `degrees(atan2(XAxisOrdinate, XAxisAbscissa))`). PROJ then chains site → base → anything.
+  `degrees(atan2(XAxisOrdinate, XAxisAbscissa))`). PROJ then chains site → compound → anything.
 - `set_crs(bdf, crs)`: labels the model with a CRS (PROJJSON, a `pyproj.CRS` or user input such
   as `"EPSG:7415"`) without moving the geometry, like `GeoDataFrame.set_crs`. The CRS must have
   three axes.
@@ -202,8 +202,8 @@ geopandas.read_parquet("sixty5_geog.parquet", columns=["id", "class", "geog"]).t
   the old `bbox` when the frame has no `mesh` column) and the footprints are kept inside it.
   The target must have three axes, so that the meshes keep one unit per axis: `"EPSG:7415"`,
   not `"EPSG:28992"`.
-  `native_geom` keeps its sweeps only under an affine transformation (to the base CRS of the
-  Engineering CRS, for instance): the matrix is composed onto each sweep's `placement`, scale
+  `native_geom` keeps its sweeps only under an affine transformation (to the `compound_crs`
+  of a site CRS, for instance): the matrix is composed onto each sweep's `placement`, scale
   included, and the profile and depth stay in the sweep's own unit. A geographic, geocentric or
   differently projected target nulls it. `lightbim_qa.deviation`, a length, is scaled by the
   same matrix into the target's unit (1500 mm becomes 1.5 m in EPSG:7415), and nulled when the

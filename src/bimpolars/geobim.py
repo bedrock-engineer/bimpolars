@@ -1,9 +1,9 @@
-"""Georeferencing: the Engineering CRS of a model, and moving a model to another CRS.
+"""Georeferencing: the site CRS of a model, and moving a model to another CRS.
 
 A model fresh from a reader sits in its own Cartesian coordinates, a plain EngineeringCRS.
-Georeferencing says where that is on earth: :func:`derived_engineering_crs` turns a site origin
-and a rotation on a projected plus vertical CRS such as EPSG:7415 (RD New + NAP) into an
-Engineering CRS that PROJ can transform, :func:`set_crs` labels a model with it,
+Georeferencing says where that is on earth: :func:`site_crs` turns a site origin and a rotation
+in a compound of a projected and a vertical CRS, such as EPSG:7415 (RD New + NAP), into a site
+CRS that PROJ can transform, :func:`set_crs` labels a model with it,
 :func:`to_crs` moves the geometry columns to any CRS pyproj knows, and :func:`with_geog` adds
 the footprints in OGC:CRS84h next to the model's own, for GeoJSON and GeoParquet readers on
 the web.
@@ -65,8 +65,8 @@ _PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
 """Warnings of this module point at the caller outside bimpolars."""
 
 
-def derived_engineering_crs(
-    base_crs: CRSLike,
+def site_crs(
+    compound_crs: CRSLike,
     easting: float,
     northing: float,
     orthometric_height: float,
@@ -75,23 +75,25 @@ def derived_engineering_crs(
     unit: LinearUnit | CRSLike | BimDataFrame,
     name: str = "Site",
 ) -> pyproj.CRS:
-    """Derives an Engineering CRS from a projected plus vertical CRS by georeferencing parameters.
+    """Derives the CRS of a site from a projected plus vertical CRS by georeferencing parameters.
 
-    The site origin (0, 0, 0) lands on ``(easting, northing)`` in the projected CRS and on
-    ``orthometric_height`` in the vertical CRS, and the site's y-axis points ``rotation``
-    degrees counterclockwise from grid north. The scale between site and map is not a
-    parameter: it follows from ``unit`` and the base CRS's own units.
+    The site origin (0, 0, 0) lands on ``(easting, northing)`` in the projected CRS of
+    ``compound_crs`` and on ``orthometric_height`` in its vertical CRS, and the site's y-axis
+    points ``rotation`` degrees counterclockwise from grid north. The scale between site and
+    map is not a parameter: it follows from ``unit`` and the units of ``compound_crs``.
 
     The result is a CompoundCRS of a DerivedProjectedCRS with an Affine parametric
     transformation (EPSG:9624) on the projected CRS and a DerivedVerticalCRS with a Vertical
-    Offset (EPSG:9616) on the vertical CRS, with all three axes in ``unit``. PROJ applies a
-    deriving conversion from the base to the derived CRS, so the affine parameters hold the
-    inverse of the georeferencing (map to site), and the factor between the map unit and the
-    site unit sits in the coefficients.
+    Offset (EPSG:9616) on the vertical CRS, with all three axes in ``unit``. In ISO 19111 terms
+    it is not an EngineeringCRS: the two components of ``compound_crs`` are the base CRSs of
+    its parts, which inherit their geodetic and vertical reference frames. PROJ applies a deriving
+    conversion from the base to the derived CRS, so the affine parameters hold the inverse of
+    the georeferencing (map to site), and the factor between the map unit and the site unit
+    sits in the coefficients.
 
     Args:
-        base_crs: A compound CRS of a projected and a vertical CRS, such as ``"EPSG:7415"``
-            (RD New + NAP height).
+        compound_crs: A compound CRS of a projected and a vertical CRS, such as
+            ``"EPSG:7415"`` (RD New + NAP height).
         easting: Easting of the site origin, in the projected CRS's unit.
         northing: Northing of the site origin, in the projected CRS's unit.
         orthometric_height: Height of the site origin, in the vertical CRS's unit.
@@ -105,19 +107,22 @@ def derived_engineering_crs(
         name: The site's name, used in the names of the CRS and its parts.
 
     Returns:
-        The Engineering CRS, for :func:`set_crs`.
+        The site CRS, for :func:`set_crs`.
 
     Raises:
-        ValueError: If ``base_crs`` is not a compound CRS of a projected and a vertical CRS
+        ValueError: If ``compound_crs`` is not a compound CRS of a projected and a vertical CRS
             that PROJ can derive from, or ``unit`` is neither a unit nor a CRS with a linear
             unit.
     """
-    base, _ = resolve_crs(base_crs)
-    components = base.sub_crs_list
+    parsed, _ = resolve_crs(compound_crs)
+    components = parsed.sub_crs_list
     if len(components) != 2 or not components[0].is_projected or not components[1].is_vertical:
+        kind = parsed.type_name
+        if components:
+            kind += " of a " + " and a ".join(part.type_name for part in components)
         raise ValueError(
-            f"base_crs must be a compound CRS of a projected and a vertical CRS, such as "
-            f"EPSG:7415; {base.name!r} is a {base.type_name}"
+            f"compound_crs must be a compound CRS of a projected and a vertical CRS, such as "
+            f"EPSG:7415; {parsed.name!r} is a {kind}"
         )
     projected, vertical = components
     site_unit = unit_projjson(as_linear_unit(unit))
@@ -196,20 +201,20 @@ def derived_engineering_crs(
     crs = {
         "$schema": PROJJSON_SCHEMA,
         "type": "CompoundCRS",
-        "name": f"{name} Engineering CRS",
+        "name": f"{name} site CRS",
         "components": [site_grid, site_z],
     }
     try:
         return pyproj.CRS.from_json_dict(crs)
     except pyproj.exceptions.CRSError as error:
-        raise ValueError(f"PROJ cannot build the Engineering CRS: {error}") from error
+        raise ValueError(f"PROJ cannot build the site CRS: {error}") from error
 
 
 def set_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
     """Labels a model with a CRS without moving its geometry, like ``GeoDataFrame.set_crs``.
 
     The geometry columns keep their values: ``crs`` states what they are in. Use it with the
-    CRS of :func:`derived_engineering_crs` to georeference a model whose reader gave it a plain
+    CRS of :func:`site_crs` to georeference a model whose reader gave it a plain
     EngineeringCRS, with the same length unit.
 
     Args:
@@ -240,27 +245,27 @@ def to_crs(bdf: BimDataFrame, crs: CRSLike) -> BimDataFrame:
     EPSG:7415 is in metres.
 
     ``native_geom``, the sweeps a reader placed in the model CRS
-    (:data:`bimpolars.NATIVE_GEOM_DTYPE`), survives only an affine transformation (to the base
-    CRS of a :func:`derived_engineering_crs`, for example): the matrix of
+    (:data:`bimpolars.NATIVE_GEOM_DTYPE`), survives only an affine transformation (to the
+    ``compound_crs`` of a :func:`site_crs`, for example): the matrix of
     :func:`affine_transformation` is composed onto every sweep's ``placement``, scale
     included, so that the profile and the depth stay in the sweep's own coordinates. The
     column is nulled when the transformation is not affine within :data:`AFFINE_TOLERANCE`
     over the model's extent (and at least a kilometre), as it is to a geographic, geocentric
     or differently projected CRS. ``lightbim_qa.deviation``, a length, follows the change of
     unit the same way: it is scaled by the matrix's linear scale (the cube root of the
-    determinant of its 3x3 part, exact for the similarity of a derived engineering CRS), and
+    determinant of its 3x3 part, exact for the similarity of a site CRS), and
     nulled when the transformation is not affine.
 
-    The transformation from or to a derived CRS, such as the compound of
-    :func:`derived_engineering_crs`, goes through its base CRS, so that PROJ's geodetic steps
-    see heights in the base CRS's unit (see :func:`_transformer`). When the best
+    The transformation from or to a derived CRS, such as the compound of :func:`site_crs`,
+    goes through its base CRS, so that PROJ's geodetic steps see heights in the base CRS's
+    unit (see :func:`_transformer`). When the best
     transformation PROJ knows needs grids that are not installed (RDNAPTRANS2018 needs the
     NSGI grids), a ``UserWarning`` names them and PROJ falls back to a less accurate
     operation.
 
     Args:
-        bdf: The model, with a CRS pyproj can transform from: an EngineeringCRS of
-            :func:`derived_engineering_crs`, or any georeferenced CRS.
+        bdf: The model, with a CRS pyproj can transform from: a site CRS of :func:`site_crs`,
+            or any georeferenced CRS.
         crs: The target CRS: PROJJSON, a ``pyproj.CRS``, or user input such as
             ``"EPSG:7415"`` or ``"OGC:CRS84h"``. It must have three axes, so that the meshes
             keep one unit per axis: ``"EPSG:28992"`` is refused, ``"EPSG:7415"`` works.
@@ -402,14 +407,14 @@ def with_geog(bdf: BimDataFrame) -> BimDataFrame:
     ``with_geog`` after it.
 
     The transformation is the one :func:`to_crs` applies for ``"OGC:CRS84h"``, through the base
-    CRS of a derived Engineering CRS (see :func:`_transformer`), and it warns in the same way
+    CRS of a site CRS (see :func:`_transformer`), and it warns in the same way
     when PROJ's best transformation needs grids that are not installed: without the NSGI grids
     a Dutch site moves by a Helmert transformation that is good to about a metre, and its NAP
     heights pass off as ellipsoidal ones.
 
     Args:
         bdf: The model with its ``footprint`` column (see :func:`bimpolars.simple_features`),
-            in a georeferenced CRS: the Engineering CRS of :func:`derived_engineering_crs`,
+            in a georeferenced CRS: the site CRS of :func:`site_crs`,
             set with :func:`set_crs`, or any CRS pyproj can transform to WGS 84.
 
     Returns:
@@ -466,7 +471,7 @@ def linearized_site_to_ecef(crs: CRSLike) -> np.ndarray[Any, np.dtype[np.float64
     the site origin lands, and each column is where one metre along a site axis points.
 
     Args:
-        crs: The site's CRS, as :func:`derived_engineering_crs` gives it: PROJJSON, a
+        crs: The site's CRS, as :func:`site_crs` gives it: PROJJSON, a
             ``pyproj.CRS``, or user input. Its axes must be in a linear unit.
 
     Returns:
@@ -532,7 +537,7 @@ class _Chain:
 def _transformer(source: pyproj.CRS, target: pyproj.CRS) -> _Transformation:
     """The transformation from the model CRS to a target, with x, y, z in that order.
 
-    A derived CRS (the compound of :func:`derived_engineering_crs`) is passed through its base
+    A derived CRS (the compound of :func:`site_crs`) is passed through its base
     CRS: PROJ otherwise orders the deriving conversion of the vertical CRS after a geodetic
     step, so that a 3D Helmert transformation reads a site's millimetres as metres. The
     conversion to the base CRS is exact, so the chain costs nothing.
@@ -556,7 +561,7 @@ def _transformer(source: pyproj.CRS, target: pyproj.CRS) -> _Transformation:
         raise ValueError(
             f"pyproj knows no transformation from the model CRS {source.name!r} to "
             f"{target.name!r}; a plain EngineeringCRS is not georeferenced: label the model "
-            f"with set_crs and derived_engineering_crs first"
+            f"with set_crs and site_crs first"
         ) from error
     for start, end in steps:
         _warn_about_missing_grids(start, end)

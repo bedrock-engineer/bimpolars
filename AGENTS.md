@@ -38,7 +38,7 @@ Tests that read a model of hundreds of MB are marked `slow` and run only with
   `crs.as_linear_unit`) and is stored as PROJJSON (`src/bimpolars/crs.py`), which the
   GeoParquet and glTF metadata carry: code that writes or compares the stored CRS uses
   `bdf.projjson`, code that asks PROJ uses `bdf.crs`. CRSs handed back to the user
-  (`bdf.crs`, `derived_engineering_crs`) are `pyproj.CRS`; the PROJJSON builders
+  (`bdf.crs`, `site_crs`) are `pyproj.CRS`; the PROJJSON builders
   `engineering_crs` and `CRS84H` stay PROJJSON. The geobim functions and `bimpolars.data` are
   on the package itself, so `import bimpolars as bpl` is all a notebook needs.
 - The Pages site (`.github/workflows/pages.yml`) is specklestuff's demo page (its `site/`),
