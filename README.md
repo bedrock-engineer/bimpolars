@@ -401,10 +401,12 @@ same.equals(bdf)  # True: the bucket's objects were projected the same way
   `properties.Parameters.Instance Parameters.Dimensions` a group's values (`Volume`), and
   `object` the object's own fields (`family`, `type`). The path is the bundle's eav `path`
   column, so a value is found at `f"{set}.{name}"`. The bundle's values (type parameters
-  included, instance values winning) fill the rows the objects leave bare. A value keeps the
-  unit Revit states for its parameter (the eav `unit` column: lengths in millimetres, areas in
-  square metres, volumes in cubic metres, the `Volume` above included); it is not scaled to the
-  model unit.
+  included, instance values winning) fill the rows the objects leave bare. A property is a
+  number only when the bundle has a number for every value of it (`elementId`); otherwise it is
+  text, also where the object carries a number, so a Mark `"129"` stays text next to `"104A"`
+  and `name` never becomes a number. A value keeps the unit Revit states for its parameter
+  (the eav `unit` column: lengths in millimetres, areas in square metres, volumes in cubic
+  metres, the `Volume` above included); it is not scaled to the model unit.
 - With a bundle, the levels (the envelope's level nodes) become rows of class `Levels` with
   their `elevation` and the id `level-<node id>`, and every element's `container` points at
   its level, so `simple_features` places the footprints at the level. Without one, `container`

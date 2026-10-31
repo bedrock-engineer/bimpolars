@@ -25,8 +25,13 @@ the bucket, to those objects: `bundle_model` and `bundle_objects`.
 - The property set of a value is the dotted path of its group (`properties`,
   `properties.Parameters.Instance Parameters.Dimensions`, and `object` for the object's own
   fields), the same for the object's bag and the bundle's eav `path`.
-- An eav row with a number and its text gives the number; values keep the unit the eav `unit`
-  column states (lengths mm, areas m², volumes m³), never scaled.
+- An eav row has its value as text and, when the text reads as one, as a number (or boolean)
+  too. The type is decided per path over `eav.eav` and `eav.type_eav` together: a number only
+  when every value of the path has one (`elementId`), else all text (`Mark`: `"129"` next to
+  `"104A"`, #35); `name` and `category` are always text. On a text path the bundle's value
+  replaces the object's, because specklepy builds the objects with a number wherever the text
+  reads as one. Values keep the unit the eav `unit` column states (lengths mm, areas m²,
+  volumes m³), never scaled.
 - Styles: the root's `renderMaterialProxies` (first proxy that targets the mesh, the element or
   the instance wins), then the envelope's `HAS_MATERIAL` for definition geometry. Every mesh of
   an element carries the element's applicationId, so a layered wall or ceiling gets its first
@@ -44,6 +49,8 @@ the bucket, to those objects: `bundle_model` and `bundle_objects`.
 - A bundle is a folder, a mapping of tables, or its URL in the bucket (`data.bucket_key` strips
   `DATA_URL`, http or https, and refuses keys that leave the data folder; `bundle_folder`
   fetches the tables into the data folder; any other URL raises).
+- `fetch_bundle` skips the `REVIT_TABLES` the bucket answers 404 for (an IFC file's bundle,
+  schema 1.2, has none) or, with `download=False`, the folder lacks.
 - `fetch_bundle` knows the 18 `BUNDLE_TABLES`, not the overflow geometry shards
   `<name>.geometries.<N>.parquet` specklepy writes past 1.5 GiB, so a bundle that large must
   come from a complete folder (a listing comes with the generic-bucket decision on #21).

@@ -531,6 +531,77 @@ def test_bundle_elements_without_an_object_get_rows() -> None:
     assert read_speckle(model_objects()).frame["id"].to_list()[-1] == "beam"
 
 
+def test_the_bundle_types_values_per_path() -> None:
+    # a path is a number (or a boolean) only when every value of it has one (#35): Marks are
+    # text, also over the number the wall's object carries; Type Mark is text across the
+    # objects and their types; a name stays text
+    tables = bundle_tables()
+    identity = "properties.Identity Data"
+    tables["eav.paths"] = pl.concat(
+        [
+            tables["eav.paths"],
+            pl.DataFrame(
+                {
+                    "path_index": [6, 7, 8],
+                    "path": [f"{identity}.Mark", f"{identity}.Fire Rated", f"{identity}.Type Mark"],
+                }
+            ),
+        ]
+    )
+    named = (pl.col("object_index") == 2) & (pl.col("path_index") == 1)
+    tables["eav.eav"] = pl.concat(
+        [
+            tables["eav.eav"].with_columns(
+                value_string=pl.when(named).then(pl.lit("192754")).otherwise("value_string"),
+                value_double=pl.when(named).then(192_754.0).otherwise("value_double"),
+            ),
+            pl.DataFrame(
+                {
+                    "object_index": [0, 1, 2, 0, 1, 0],
+                    "path_index": [6, 6, 6, 7, 7, 8],
+                    "value_string": ["129", "104A", "007", "true", "false", "12"],
+                    "value_double": [129.0, None, 7.0, None, None, 12.0],
+                    "value_boolean": [None, None, None, True, False, None],
+                }
+            ),
+        ],
+        how="vertical_relaxed",
+    )
+    tables["eav.type_eav"] = pl.concat(
+        [
+            tables["eav.type_eav"],
+            pl.DataFrame(
+                {
+                    "type_index": [0],
+                    "path_index": [8],
+                    "value_string": ["B"],
+                    "value_double": [None],
+                    "value_boolean": [None],
+                }
+            ),
+        ],
+        how="vertical_relaxed",
+    )
+    objects = model_objects()
+    wall = next(obj for obj in objects if obj["id"] == "wall")
+    wall["properties"] = {"Identity Data": {"Mark": 129.0}}  # as specklepy builds it
+    bdf = read_speckle(objects, tables)
+    schema = bdf.frame.schema["properties"].to_schema()
+    assert schema[identity].to_schema() == {
+        "Mark": pl.String,
+        "Fire Rated": pl.Boolean,
+        "Type Mark": pl.String,
+    }
+    assert schema["properties"].to_schema()["elementId"] == pl.Float64
+    sets = {row_id: row(bdf, row_id)["properties"][identity] for row_id in ("w1", "col-1", "e1")}
+    assert sets == {
+        "w1": {"Mark": "129", "Fire Rated": True, "Type Mark": "12"},
+        "col-1": {"Mark": "104A", "Fire Rated": False, "Type Mark": "B"},
+        "e1": {"Mark": "007", "Fire Rated": None, "Type Mark": None},
+    }
+    assert row(bdf, "e1")["name"] == "192754"
+
+
 def test_envelope_kinds_and_relations_are_looked_up_by_name() -> None:
     # a bundle that numbers LEVEL and ON_LEVEL differently says so in its lookup tables
     tables = bundle_tables()
