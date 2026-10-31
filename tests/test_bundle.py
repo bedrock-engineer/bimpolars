@@ -1,7 +1,7 @@
 """bundle_objects on the Revit Advanced Sample bundles, against the bucket's v3 objects.
 
 The bucket's ``speckle-v3-objects.parquet`` holds the three versions as the reference notebook
-projected them (specklepy 2026.9.1 with the same two fixes), so the projection here must give
+built them (specklepy 2026.9.1 with the same two fixes), so bundle_objects here must give
 the same objects, and ``read_speckle`` the same frame, with the bundle named by its bucket URL."""
 
 from __future__ import annotations
@@ -42,9 +42,9 @@ N_ROWS = {"arch": 5877, "str": 939, "mep": 8629}
 N_MESHES = {"arch": 5568, "str": 918, "mep": 6942}
 N_BUNDLE_OBJECTS = {"arch": 5872, "str": 935, "mep": 8625}
 N_OWN_GEOMETRY_AND_PLACED = {"arch": 75, "str": 841, "mep": 10}
-"""Elements with geometry of their own and a placement: what the plain projection drops."""
+"""Elements with geometry of their own and a placement: what the plain to_base drops."""
 N_STYLED_DEFINITION_GEOMETRIES = {"arch": 719, "str": 27, "mep": 610}
-"""Definition geometries the envelope gives a material: what the plain projection leaves grey."""
+"""Definition geometries the envelope gives a material: what the plain to_base leaves grey."""
 
 
 def bucket_url(version: data.SpeckleVersion) -> str:
@@ -74,7 +74,7 @@ def bucket_objects(version: data.SpeckleVersion) -> list[dict]:
 
 @pytest.fixture(scope="module")
 def plain(version: data.SpeckleVersion) -> Collection:
-    """specklepy's own projection of the bundle, without the two fixes."""
+    """specklepy's own to_base of the bundle, without the two fixes."""
     return bundle_model(data.fetch_bundle(version.bundle)).to_base()
 
 
@@ -100,7 +100,7 @@ def placements(root: Collection) -> list[str]:
 
 
 def plain_element_objects(root: Collection) -> set[str]:
-    """The same for specklepy's own projection, before serialization."""
+    """The same for specklepy's own to_base, before serialization."""
     found: set[str] = set()
     for child in root.elements:
         if isinstance(child, Collection):
@@ -181,7 +181,7 @@ def test_placed_elements_keep_their_geometry(
         and obj["applicationId"].endswith(FIRST_PLACEMENT_SUFFIX)
     }
     assert renamed == {f"{base}{FIRST_PLACEMENT_SUFFIX}" for base in both}
-    # specklepy's own projection has no DataObject for them
+    # specklepy's own to_base has no DataObject for them
     without = plain_element_objects(plain)
     assert element_objects(objects) == without | set(both)
     assert without.isdisjoint(both)

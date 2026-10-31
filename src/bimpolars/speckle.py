@@ -5,12 +5,12 @@ every object underneath it, DataObjects with a ``displayValue`` of Meshes, long
 arrays detached into DataChunks, and instances: an ``InstanceProxy`` places the geometry
 of an ``InstanceDefinitionProxy`` (listed on the root) with a 4x4 transform. Those objects
 come from a Speckle server, or from a bundle (the Parquet tables a Revit or IFC file is
-converted to) projected to v3 objects with specklepy. :func:`version_objects` reads one
+converted to) built into v3 objects with specklepy. :func:`version_objects` reads one
 version's objects from a local copy; :func:`read_speckle` turns them into a
 :class:`~bimpolars.BimDataFrame`, expanding the instances, and reads the Revit categories,
 parameters and levels from the version's bundle when one is given. Nothing here needs
-specklepy; :mod:`bimpolars.bundle` (the ``[speckle]`` extra) does, to project a bundle on disk
-to the objects this module reads.
+specklepy; :mod:`bimpolars.bundle` (the ``[speckle]`` extra) does, to build the objects this
+module reads from a bundle on disk.
 """
 
 from __future__ import annotations
@@ -199,7 +199,7 @@ def read_speckle(
     element ``<applicationId>``, as does any other object with that applicationId, so an
     element placed several times, or placed and carrying geometry of its own, is one row with
     one merged mesh. With a bundle, the elements the bundle knows but the version has no
-    object for (Revit elements the projection leaves out: curtain walls, room separations, MEP
+    object for (Revit elements specklepy builds no object for: curtain walls, room separations, MEP
     systems, wires and circuits) get rows too, with the bundle's category, name, properties
     and level and a null ``mesh``, so that the frame has one row per element of the model, as
     :func:`bimpolars.read_ifc` has.
@@ -231,7 +231,7 @@ def read_speckle(
       element's, or the instance's, with its ``diffuse`` ARGB and ``opacity``. The first proxy
       that does wins when several do, which paints a layered wall, floor or ceiling (one proxy
       per layer, all targeting the element) in its first layer's material. A definition's mesh
-      without one (specklepy's plain projection gives none, unlike
+      without one (specklepy's plain ``Model.to_base()`` gives none, unlike
       :func:`bimpolars.bundle.bundle_objects`) gets, with a bundle, the material the envelope
       attaches to the bundle geometry it came from (``def-geo-<geometry index>``). A mesh
       without either is unstyled. A ``displayValue`` reference to an object the version
@@ -456,7 +456,7 @@ class _Reader:
         app_id = mesh.get("applicationId")
         style = self.materials.get(str(app_id)) if app_id else None
         if style is None and isinstance(app_id, str):
-            # A definition's mesh is named after the bundle geometry it was projected from
+            # A definition's mesh is named after the bundle geometry it was built from
             match = _DEFINITION_GEOMETRY.match(app_id)
             if match:
                 style = self.geometry_styles.get(int(match.group("index")))
