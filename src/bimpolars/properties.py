@@ -2,7 +2,7 @@
 
 Every reader has the same problem: each element carries named sets of properties (IFC
 property and quantity sets, Speckle properties) whose values are typed per element, while a
-column needs one dtype. :func:`properties_series` infers it from the values: a property whose
+column needs one dtype. ``properties_series`` infers it from the values: a property whose
 values agree across rows gets their dtype, a property whose values disagree becomes a String.
 """
 
@@ -50,11 +50,12 @@ def properties_series(
     are null.
 
     Args:
-        rows: Per row, its sets by name, each a mapping of property name to value.
-        name: The column name.
+        rows (Sequence[Mapping[str, Mapping[str, Any]]]): Per row, its sets by name, each a mapping
+            of property name to value.
+        name (str): The column name.
 
     Returns:
-        A Series of ``len(rows)`` Structs.
+        pl.Series: A Series of ``len(rows)`` Structs.
     """
     kinds: dict[str, dict[str, set[Kind]]] = {}
     for row in rows:

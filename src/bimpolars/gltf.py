@@ -1,11 +1,11 @@
 """Binary glTF (glb) of a BimDataFrame's meshes, one primitive and material per style.
 
 glTF 2.0 is what CesiumJS, three.js, Blender and most 3D viewers load: triangle meshes in
-metres with the y-axis up. :func:`element_meshes_glb` writes the meshes of a
-:class:`~bimpolars.BimDataFrame` as one glb, the faces grouped by style into one primitive
-each, and :func:`triangles_glb` writes any triangles in metres the same way. Both keep the
+metres with the y-axis up. ``element_meshes_glb`` writes the meshes of a
+``BimDataFrame`` as one glb, the faces grouped by style into one primitive
+each, and ``triangles_glb`` writes any triangles in metres the same way. Both keep the
 model's z-up coordinates in the vertex data and turn the scene y-up with a rotation on the root
-node (:data:`Y_UP_ROTATION`), so a reader that applies node transforms shows the model upright
+node (``Y_UP_ROTATION``), so a reader that applies node transforms shows the model upright
 and one that reads the accessors finds the model as it is, in metres.
 """
 
@@ -37,7 +37,7 @@ model matrix.
 """
 
 EXCLUDED_CLASSES: tuple[str, ...] = ("IfcOpeningElement",)
-"""The classes :func:`element_meshes_glb` leaves out: an opening's mesh is the void it cuts."""
+"""The classes ``element_meshes_glb`` leaves out: an opening's mesh is the void it cuts."""
 
 UNIT = "metre"
 """The length unit of the vertex data, whatever the BIM CRS's unit: glTF's metre."""
@@ -68,7 +68,7 @@ _Material = tuple[str | None, tuple[float, float, float, float]]
 def element_meshes_glb(bdf: BimDataFrame | pl.DataFrame, *, normals: bool = True) -> bytes:
     """Writes the meshes of a BimDataFrame as binary glTF, one primitive per style.
 
-    Every row with a mesh is written, except the :data:`EXCLUDED_CLASSES` (an
+    Every row with a mesh is written, except the ``EXCLUDED_CLASSES`` (an
     ``IfcOpeningElement`` carries the mesh of the void it cuts). The vertices go from the
     model's length unit (the unit of the CRS's axes) to glTF's metres. The faces
     are grouped by style, ``(name, rgba)`` of the mesh's ``styles``, into one primitive each,
@@ -76,18 +76,18 @@ def element_meshes_glb(bdf: BimDataFrame | pl.DataFrame, *, normals: bool = True
     translucent, double sided, matte), so that a viewer renders the model the way its authoring
     tool coloured it.
 
-    The scene is one root node that turns the model y-up (:data:`Y_UP_ROTATION`), with one
+    The scene is one root node that turns the model y-up (``Y_UP_ROTATION``), with one
     child node holding the mesh. The root node is named after the CRS and carries it as
-    ``extras.crs``, next to ``extras.unit``, the :data:`UNIT` of the vertex data: the CRS keeps
+    ``extras.crs``, next to ``extras.unit``, the ``UNIT`` of the vertex data: the CRS keeps
     its own unit (millimetres for most IFCs) while the data under the node is in metres. The
     child is translated to the centre of the written vertices' bounding box and the vertex data
     is relative to it, so that the float32 vertices of a model far from its origin
     (georeferenced in a projected CRS, for instance) keep their precision.
 
     Args:
-        bdf: A BimDataFrame with the ``mesh`` column (and ``class``, to leave openings out),
-            or a polars DataFrame with those and ``bim_crs``, in one CRS.
-        normals: Whether to write normals. With them every triangle gets its own three
+        bdf (BimDataFrame | pl.DataFrame): A BimDataFrame with the ``mesh`` column (and ``class``,
+            to leave openings out), or a polars DataFrame with those and ``bim_crs``, in one CRS.
+        normals (bool): Whether to write normals. With them every triangle gets its own three
             vertices with the face normal, so the glb is flat shaded in every viewer and holds
             three vertices per face of the ``mesh`` column (the meshes share vertices between
             faces of different orientation, so per-vertex normals cannot be flat). Without
@@ -97,13 +97,14 @@ def element_meshes_glb(bdf: BimDataFrame | pl.DataFrame, *, normals: bool = True
             three.js smooths it.
 
     Returns:
-        The glb file content.
+        bytes: The glb file content.
 
     Raises:
-        ValueError: If the frame has no ``mesh`` column, not exactly one BIM CRS (a frame
-            without rows has none), the CRS has no linear unit, a mesh's
-            styles do not cover its faces exactly, a style has no colour, or a face points
-            outside its mesh's vertices.
+        ValueError: If the frame has no ``mesh`` column.
+        ValueError: If the frame has not exactly one BIM CRS; a frame without rows has none.
+        ValueError: If the CRS has no linear unit.
+        ValueError: If a mesh's styles do not cover its faces exactly, or a style has no colour.
+        ValueError: If a face points outside its mesh's vertices.
     """
     bdf = as_bim_dataframe(bdf)
     frame = bdf.frame
@@ -140,19 +141,20 @@ def triangles_glb(groups: Mapping[str, tuple[npt.ArrayLike, Sequence[float]]]) -
 
     Each group becomes one primitive with one material, for terrain, extruded footprints or
     any geometry that is not a BimDataFrame. The scene is laid out as in
-    :func:`element_meshes_glb`: a root node that turns the triangles y-up and a child node at
+    ``element_meshes_glb``: a root node that turns the triangles y-up and a child node at
     the centre of the written vertices' bounding box.
 
     Args:
-        groups: Per material name, the triangles as an ``(n, 3, 3)`` array of corner
-            coordinates in metres and the colour as RGB or RGBA in 0..1.
+        groups (Mapping[str, tuple[npt.ArrayLike, Sequence[float]]]): Per material name, the
+            triangles as an ``(n, 3, 3)`` array of corner coordinates in metres and the colour as
+            RGB or RGBA in 0..1.
 
     Returns:
-        The glb file content.
+        bytes: The glb file content.
 
     Raises:
-        ValueError: If an array is not ``(n, 3, 3)`` or a colour is not three or four values
-            in 0..1.
+        ValueError: If an array is not ``(n, 3, 3)``.
+        ValueError: If a colour is not three or four values in 0..1.
     """
     parsed: list[tuple[str, _Floats, tuple[float, float, float, float]]] = []
     for name, (triangles, colour) in groups.items():
@@ -187,13 +189,13 @@ def _geometry(meshes: pl.Series, scale: float) -> tuple[_Floats, _Ints, list[_Ma
     """Concatenates the meshes of a ``mesh`` Series, scaled to metres.
 
     Returns:
-        The vertices ``(n, 3)``, the faces ``(m, 3)`` as indices into them, the distinct
+        tuple: The vertices ``(n, 3)``, the faces ``(m, 3)`` as indices into them, the distinct
         styles as ``(name, rgba)`` sorted by name (unstyled last), and per face the index of
         its style.
 
     Raises:
-        ValueError: If a mesh's styles do not cover its faces exactly, a style has no colour,
-            or a face points outside its mesh's vertices.
+        ValueError: If a mesh's styles do not cover its faces exactly, or a style has no colour.
+        ValueError: If a face points outside its mesh's vertices.
     """
     vertices = meshes.struct.field("vertices")
     faces = meshes.struct.field("faces")
@@ -259,10 +261,10 @@ class _Glb:
         """Makes the centre of the vertices' bounding box the mesh node's translation.
 
         Args:
-            vertices: Every vertex the file will hold, ``(n, 3)``.
+            vertices (_Floats): Every vertex the file will hold, ``(n, 3)``.
 
         Returns:
-            The vertices relative to that centre, as the accessors store them.
+            _Floats: The vertices relative to that centre, as the accessors store them.
         """
         self._translation = (vertices.min(axis=0) + vertices.max(axis=0)) / 2
         result: _Floats = vertices - self._translation
@@ -289,8 +291,8 @@ class _Glb:
         """Adds a non-indexed primitive: every triangle its own vertices with the face normal.
 
         Args:
-            corners: The triangles as ``(n, 3, 3)`` corner coordinates.
-            material: The index of the primitive's material.
+            corners (_Floats): The triangles as ``(n, 3, 3)`` corner coordinates.
+            material (int): The index of the primitive's material.
         """
         normals = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])
         lengths = np.linalg.norm(normals, axis=1, keepdims=True)
@@ -315,10 +317,10 @@ class _Glb:
         """Adds a primitive that indexes a shared POSITION accessor.
 
         Args:
-            faces: The triangles as ``(n, 3)`` indices into the accessor.
-            position: The index of the POSITION accessor.
-            vertex_count: How many vertices that accessor holds, for the index type.
-            material: The index of the primitive's material.
+            faces (_Ints): The triangles as ``(n, 3)`` indices into the accessor.
+            position (int): The index of the POSITION accessor.
+            vertex_count (int): How many vertices that accessor holds, for the index type.
+            material (int): The index of the primitive's material.
         """
         # The largest value of an index type is reserved, so 65535 vertices still fit a short
         if vertex_count <= 65535:
@@ -376,8 +378,7 @@ class _Glb:
         """Packs the glb: the JSON chunk and, when there is geometry, the binary chunk.
 
         Raises:
-            ValueError: If a value that reaches the JSON is NaN or infinite (a NaN vertex
-                gives NaN bounds), which JSON cannot hold.
+            ValueError: If a JSON value is NaN or infinite, such as the bounds of a NaN vertex.
         """
         root: dict[str, Any] = {"rotation": list(Y_UP_ROTATION)}
         if self._name is not None:

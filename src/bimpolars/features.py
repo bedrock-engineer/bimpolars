@@ -1,10 +1,10 @@
 """Simple features of BIM elements: the plan footprint of every mesh, as WKB.
 
-A :class:`~bimpolars.BimDataFrame` fresh from a reader has its geometry as meshes. The GIS side
+A ``BimDataFrame`` fresh from a reader has its geometry as meshes. The GIS side
 of a project wants each element as a simple feature: here its footprint, the outline of the
 mesh in plan, placed flat at the level of the storey the element belongs to. The footprint is a
 ``POLYGON Z`` or ``MULTIPOLYGON Z`` in the BIM CRS, stored as ISO WKB in a Binary column so
-that the frame writes as GeoParquet (see :mod:`bimpolars.geoparquet`).
+that the frame writes as GeoParquet (see ``bimpolars.geoparquet``).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ FOOTPRINT_DTYPE = pl.Binary
 """The dtype of the ``footprint`` column: ISO WKB with Z coordinates."""
 
 FEATURE_COLUMNS: tuple[str, ...] = ("footprint_ref", "footprint")
-"""The columns :func:`simple_features` adds, in order."""
+"""The columns ``simple_features`` adds, in order."""
 
 _REQUIRED_COLUMNS = ("id", "container", "elevation", "mesh", "bbox")
 
@@ -41,7 +41,7 @@ def simple_features(
     Two columns are added (or replaced):
 
     - ``footprint``: the mesh's outline in plan as ``POLYGON Z`` or ``MULTIPOLYGON Z`` in the
-      BIM CRS, encoded as ISO WKB (:data:`FOOTPRINT_DTYPE`). It is the union of the mesh's
+      BIM CRS, encoded as ISO WKB (``FOOTPRINT_DTYPE``). It is the union of the mesh's
       triangles projected to the XY plane, so holes and separate parts survive, lying flat at
       the elevation of the ``footprint_ref`` row. A mesh whose triangles are all vertical has
       no plan area and gets ``POLYGON Z EMPTY``; a row without a mesh gets null. Every mesh
@@ -49,34 +49,35 @@ def simple_features(
       plan of the elements, keeping the spatial rows.
     - ``footprint_ref``: the ``id`` of the row whose level the footprint lies at: the row's
       ``container`` when that has an ``elevation`` (the storey, for most elements), otherwise
-      the row itself, at the lowest z of its mesh. Null without a mesh.
+      the row itself, at the lowest z of its mesh. Null without a mesh. A frame filtered down
+      to its elements has lost the storeys that place the footprints, so it is refused rather
+      than silently outlined at every element's own level.
 
-    With ``lightbim=True`` the three columns of :data:`bimpolars.lightbim.LIGHTBIM_COLUMNS`
+    With ``lightbim=True`` the three columns of ``bimpolars.lightbim.LIGHTBIM_COLUMNS``
     follow: ``lightbim``, the structural-analysis reduction of every member (the axis of a
     beam, the midplane of a wall, the bearing plane of a footing), ``lightbim_kind``, what
     the member is, and ``lightbim_qa``, how that was decided and how far the mesh reaches
-    from the reduction. See :func:`bimpolars.lightbim.lightbim_features`.
+    from the reduction. See ``bimpolars.lightbim.lightbim_features``.
 
-    A ``geog`` column (the footprints in OGC:CRS84h of :func:`bimpolars.geobim.with_geog`) is
+    A ``geog`` column (the footprints in OGC:CRS84h of ``bimpolars.geobim.with_geog``) is
     dropped, since it was the previous footprint's: run ``with_geog`` again on the result.
 
     Args:
-        bdf: A BimDataFrame with the ``id``, ``container``, ``elevation``, ``mesh`` and
-            ``bbox`` columns a reader fills; ``class``, ``properties`` and ``native_geom``
-            inform the LightBIM reduction when present.
-        lightbim: Whether to add the LightBIM columns.
-        kind: With ``lightbim``, an expression that decides the kind of a row ahead of the
-            class table and the shape test; see :func:`bimpolars.lightbim.lightbim_features`.
+        bdf (BimDataFrame | pl.DataFrame): A BimDataFrame with the ``id``, ``container``,
+            ``elevation``, ``mesh`` and ``bbox`` columns a reader fills; ``class``, ``properties``
+            and ``native_geom`` inform the LightBIM reduction when present.
+        lightbim (bool): Whether to add the LightBIM columns.
+        kind (pl.Expr | None): With ``lightbim``, an expression that decides the kind of a row ahead
+            of the class table and the shape test; see ``bimpolars.lightbim.lightbim_features``.
 
     Returns:
-        The BimDataFrame with the columns appended (and ``geog`` dropped), in the same CRS.
+        BimDataFrame: The BimDataFrame with the columns appended (and ``geog`` dropped), in the same
+        CRS.
 
     Raises:
-        ValueError: If a required column is missing, ``id`` is not unique, or a row's
-            ``container`` has no row in the frame: a frame filtered down to its elements
-            has lost the storeys that place the footprints, so it is refused rather than
-            silently outlined at every element's own level. Also when ``kind`` is given
-            without ``lightbim``.
+        ValueError: If a required column is missing, or ``id`` is not unique.
+        ValueError: If a row's ``container`` has no row in the frame (see above).
+        ValueError: If ``kind`` is given without ``lightbim``.
     """
     if kind is not None and not lightbim:
         raise ValueError("kind decides the LightBIM kind: pass lightbim=True with it")
@@ -139,20 +140,21 @@ def _footprints(mesh: pl.Series, z: pl.Series) -> pl.Series:
 def plan_outline(vertices: np.ndarray, faces: np.ndarray) -> shapely.Geometry:
     """The outline of a triangle mesh in plan: the union of its triangles projected to XY.
 
-    A triangle whose plan area is below :data:`_SLIVER` times the square of the mesh's plan
+    A triangle whose plan area is below ``_SLIVER`` times the square of the mesh's plan
     extent is a sliver, a face that is vertical up to rounding, and is left out. The outline
     never leaves the mesh's bounding box in plan, so the ``bbox`` column covers it: when
     GEOS's robustness fallback rounds a vertex of the union a step outwards, the outline is
     clamped back to the box. When GEOS's floating-point overlay fails altogether on a mesh
     (it can, on many nearly coincident triangles), the union is redone on a grid of
-    :data:`_SLIVER` times the extent, which is the fixed-precision overlay that cannot fail.
+    ``_SLIVER`` times the extent, which is the fixed-precision overlay that cannot fail.
 
     Args:
-        vertices: The mesh's vertices, shape ``(n, 3)``.
-        faces: The triangles as vertex indices, shape ``(m, 3)``.
+        vertices (np.ndarray): The mesh's vertices, shape ``(n, 3)``.
+        faces (np.ndarray): The triangles as vertex indices, shape ``(m, 3)``.
 
     Returns:
-        A 2D Polygon or MultiPolygon, empty when every triangle is vertical or a sliver.
+        shapely.Geometry: A 2D Polygon or MultiPolygon, empty when every triangle is vertical or a
+        sliver.
     """
     if len(faces) == 0:
         return shapely.Polygon()
@@ -185,12 +187,13 @@ def _clamp(geometry: shapely.Geometry, low: np.ndarray, high: np.ndarray) -> sha
     """Moves the coordinates of a 2D geometry that lie outside a box onto its edge.
 
     Args:
-        geometry: A 2D geometry.
-        low: The box's minimum x and y.
-        high: The box's maximum x and y.
+        geometry (shapely.Geometry): A 2D geometry.
+        low (np.ndarray): The box's minimum x and y.
+        high (np.ndarray): The box's maximum x and y.
 
     Returns:
-        The geometry itself when its bounds are inside the box, else a clamped copy.
+        shapely.Geometry: The geometry itself when its bounds are inside the box, else a clamped
+        copy.
     """
     if shapely.is_empty(geometry):
         return geometry
@@ -206,15 +209,16 @@ def _clamp_xy(
     """Moves the x and y of a 3D geometry's coordinates outside a box onto its edge; z stays.
 
     ``shapely.transform`` drops z unless ``include_z=True``, which is why this is not
-    :func:`_clamp`.
+    ``_clamp``.
 
     Args:
-        geometry: A geometry with z coordinates.
-        low: The box's minimum x and y.
-        high: The box's maximum x and y.
+        geometry (shapely.Geometry): A geometry with z coordinates.
+        low (np.ndarray[Any, Any]): The box's minimum x and y.
+        high (np.ndarray[Any, Any]): The box's maximum x and y.
 
     Returns:
-        The geometry itself when its bounds are inside the box, else a clamped copy.
+        shapely.Geometry: The geometry itself when its bounds are inside the box, else a clamped
+        copy.
     """
     if shapely.is_empty(geometry):
         return geometry

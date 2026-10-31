@@ -24,7 +24,9 @@ Tests that read a model of hundreds of MB are marked `slow` and run only with
 
 ## Rules
 
-- Typed code with Google-style docstrings (ruff enforces `D` with the google convention).
+- Typed code with Google-style docstrings in the shape marimo's documentation panel renders:
+  read [docstrings.md](docs/agents/docstrings.md) before writing one. ruff enforces `D` with
+  the google convention, `tests/test_docstrings.py` the rest.
 - Geometry stays in the model's own coordinates and length unit (millimetres for most IFCs);
   the CRS carries the unit. Never convert to metres silently.
 - The core imports neither ifcopenshell nor specklepy. Each lives in one module behind an

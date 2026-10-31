@@ -5,11 +5,11 @@ every object underneath it, DataObjects with a ``displayValue`` of Meshes, long
 arrays detached into DataChunks, and instances: an ``InstanceProxy`` places the geometry
 of an ``InstanceDefinitionProxy`` (listed on the root) with a 4x4 transform. Those objects
 come from a Speckle server, or from a bundle (the Parquet tables a Revit or IFC file is
-converted to) built into v3 objects with specklepy. :func:`version_objects` reads one
-version's objects from a local copy; :func:`read_speckle` turns them into a
-:class:`~bimpolars.BimDataFrame`, expanding the instances, and reads the Revit categories,
+converted to) built into v3 objects with specklepy. ``version_objects`` reads one
+version's objects from a local copy; ``read_speckle`` turns them into a
+``BimDataFrame``, expanding the instances, and reads the Revit categories,
 parameters and levels from the version's bundle when one is given. Nothing here needs
-specklepy; :mod:`bimpolars.bundle` (the ``[speckle]`` extra) does, to build the objects this
+specklepy; ``bimpolars.bundle`` (the ``[speckle]`` extra) does, to build the objects this
 module reads from a bundle on disk.
 """
 
@@ -37,7 +37,7 @@ type SpeckleObject = dict[str, Any]
 
 type Bundle = str | os.PathLike[str] | Mapping[str, pl.DataFrame]
 """A Speckle bundle: the folder holding its ``<name>.<table>.parquet`` files, the URL of its
-key prefix in the bimpolars bucket (:func:`bundle_folder`), or the tables themselves by name
+key prefix in the bimpolars bucket (``bundle_folder``), or the tables themselves by name
 (``"eav.eav"``, ``"envelope.nodes"``, ...)."""
 
 SPECKLE_UNITS: dict[str, LinearUnit] = {
@@ -53,7 +53,7 @@ SPECKLE_UNITS: dict[str, LinearUnit] = {
 """The length units Speckle objects name in their ``units`` field."""
 
 LEVEL_CLASS = "Levels"
-"""The ``class`` of the rows :func:`read_speckle` adds for a bundle's levels."""
+"""The ``class`` of the rows ``read_speckle`` adds for a bundle's levels."""
 
 LEVEL_ID_PREFIX = "level-"
 """Level rows have the ``id`` ``level-<node id>``, the node id from the bundle's envelope."""
@@ -117,15 +117,16 @@ def version_objects(
       version's other objects.
 
     Args:
-        source: The Parquet or SQLite file, the DataFrame, or the SQLite connection.
-        version: The Speckle version id.
+        source (str | os.PathLike[str] | pl.DataFrame | sqlite3.Connection): The Parquet or SQLite
+            file, the DataFrame, or the SQLite connection.
+        version (str): The Speckle version id.
 
     Returns:
-        The parsed objects, the root first and its closure after it.
+        list[SpeckleObject]: The parsed objects, the root first and its closure after it.
 
     Raises:
-        ValueError: If the version is not in the source, has no root, or lacks objects of
-            its closure.
+        ValueError: If the version is not in the source, or has no root.
+        ValueError: If the version lacks objects of its closure.
     """
     if isinstance(source, pl.DataFrame):
         return _objects_from_frame(source, version)
@@ -205,7 +206,7 @@ def read_speckle(
     object for (Revit elements specklepy builds no object for: curtain walls, room separations, MEP
     systems, wires and circuits) get rows too, with the bundle's category, name, properties
     and level and a null ``mesh``, so that the frame has one row per element of the model, as
-    :func:`bimpolars.read_ifc` has.
+    ``bimpolars.read_ifc`` has.
 
     The columns:
 
@@ -215,11 +216,11 @@ def read_speckle(
     - ``class``: the object's ``category``, else the Revit category the bundle has for the
       applicationId, else the object's ``speckle_type``. Categorical.
     - ``properties``: a Struct of sets, each a Struct of values, as
-      :func:`bimpolars.properties.properties_series` infers the dtypes. A set is a group of
+      ``bimpolars.properties.properties_series`` infers the dtypes. A set is a group of
       the property tree named by its dotted path: ``properties`` holds the values directly in
       the object's property bag (``elementId``, ``typeId``), a set such as
       ``properties.Parameters.Instance Parameters.Dimensions`` holds a group's values
-      (``Volume``), and :data:`OBJECT_SET` holds the object's own fields (``family``,
+      (``Volume``), and ``OBJECT_SET`` holds the object's own fields (``family``,
       ``type``). The path is the bundle's eav ``path`` column: ``f"{set}.{name}"``. With a
       bundle, the eav values (type parameters included, instance values winning) fill the
       rows the objects leave bare, such as the instances. The bundle types a value per path:
@@ -231,16 +232,16 @@ def read_speckle(
       lengths in millimetres, areas in square metres, volumes in cubic metres); it is not
       scaled to the model unit.
     - ``container``: with a bundle, the ``id`` of the row's level (``level-<node id>``); the
-      levels get rows of their own (class :data:`LEVEL_CLASS`) with their ``elevation``.
+      levels get rows of their own (class ``LEVEL_CLASS``) with their ``elevation``.
     - ``native_geom``: null.
-    - ``mesh``: :data:`bimpolars.MESH_DTYPE` in model units, faces sorted by style; ``bbox``
+    - ``mesh``: ``bimpolars.MESH_DTYPE`` in model units, faces sorted by style; ``bbox``
       its bounds. Quads and n-gons are fan-triangulated. A style is the ``RenderMaterial`` of
       the root's ``renderMaterialProxies`` that targets the mesh's applicationId, the
       element's, or the instance's, with its ``diffuse`` ARGB and ``opacity``. The first proxy
       that does wins when several do, which paints a layered wall, floor or ceiling (one proxy
       per layer, all targeting the element) in its first layer's material. A definition's mesh
       without one (specklepy's plain ``Model.to_base()`` gives none, unlike
-      :func:`bimpolars.bundle.bundle_objects`) gets, with a bundle, the material the envelope
+      ``bimpolars.bundle.bundle_objects``) gets, with a bundle, the material the envelope
       attaches to the bundle geometry it came from (``def-geo-<geometry index>``). A mesh
       without either is unstyled. A ``displayValue`` reference to an object the version
       does not include is skipped, so a row whose geometry is only such references, or only
@@ -251,22 +252,25 @@ def read_speckle(
     geolocation is never used.
 
     Args:
-        objects: The version's objects, root first, as :func:`version_objects` or
-            :func:`bimpolars.bundle.bundle_objects` gives them.
-        bundle: The version's Speckle bundle: a folder of ``<name>.<table>.parquet`` files,
-            the URL of its key prefix in the bimpolars bucket (:func:`bundle_folder`), or
-            the tables by name. Optional; without it the rows get what the objects carry.
-        name: The model's name, for the CRS; the bundle's file name or the root's by default.
+        objects (Sequence[Mapping[str, Any]]): The version's objects, root first, as
+            ``version_objects`` or ``bimpolars.bundle.bundle_objects`` gives them.
+        bundle (Bundle | None): The version's Speckle bundle: a folder of ``<name>.<table>.parquet``
+            files, the URL of its key prefix in the bimpolars bucket (``bundle_folder``), or the
+            tables by name. Optional; without it the rows get what the objects carry.
+        name (str | None): The model's name, for the CRS; the bundle's file name or the root's by
+            default.
 
     Returns:
-        The model as a BimDataFrame.
+        BimDataFrame: The model as a BimDataFrame.
 
     Raises:
-        ValueError: If the objects have no root, name a unit this module does not know, nest
-            instance definitions in a cycle, lack a DataChunk an object refers to, or hold a
-            face list or an instance transform of the wrong length; or if the bundle folder is
-            missing, its URL is outside the bucket, it lacks ``eav.objects``, ``eav.paths`` or
-            ``eav.eav``, or holds two tables of one name.
+        ValueError: If the objects have no root, or name a unit this module does not know.
+        ValueError: If the objects nest instance definitions in a cycle.
+        ValueError: If the objects lack a DataChunk an object refers to.
+        ValueError: If a face list or an instance transform has the wrong length.
+        ValueError: If the bundle folder is missing, or its URL is outside the bucket.
+        ValueError: If the bundle lacks ``eav.objects``, ``eav.paths`` or ``eav.eav``.
+        ValueError: If the bundle holds two tables of one name.
         urllib.error.URLError: If downloading a table of a bundle named by its URL fails.
     """
     if not objects:
@@ -523,13 +527,13 @@ def bundle_folder(bundle: str | os.PathLike[str]) -> Path:
     """Gives the local folder of a Speckle bundle named by its folder or by its bucket URL.
 
     Args:
-        bundle: The folder holding the bundle's ``<name>.<table>.parquet`` files, or the URL
-            of the bundle's key prefix in the bimpolars bucket, ``<DATA_URL><prefix>`` (the
-            prefix as :func:`bimpolars.data.fetch_bundle` takes it): the tables are then
-            fetched into the data folder, downloaded if they are not there yet.
+        bundle (str | os.PathLike[str]): The folder holding the bundle's ``<name>.<table>.parquet``
+            files, or the URL of the bundle's key prefix in the bimpolars bucket,
+            ``<DATA_URL><prefix>`` (the prefix as ``bimpolars.data.fetch_bundle`` takes it): the
+            tables are then fetched into the data folder, downloaded if they are not there yet.
 
     Returns:
-        The folder.
+        Path: The folder.
 
     Raises:
         ValueError: If the folder does not exist, or the URL is not in the bucket.
@@ -575,7 +579,7 @@ class _BundleTables:
 
 
 class _BundleInfo:
-    """What :func:`read_speckle` takes from a bundle, keyed by applicationId."""
+    """What ``read_speckle`` takes from a bundle, keyed by applicationId."""
 
     def __init__(self, tables: _BundleTables) -> None:
         objects = tables.require("eav.objects")
@@ -702,7 +706,7 @@ def _value_columns(eavs: Sequence[pl.DataFrame], paths: Mapping[int, str]) -> di
     from the bundle carry), a boolean likewise; otherwise all its values are text, so that a
     Mark ``"129"`` stays text next to ``"104A"`` and a Mark ``"007"`` keeps its zeros. The
     objects and their types (``eav.eav`` and ``eav.type_eav``) decide together, since their
-    values meet in one property. :data:`_TEXT_PATHS` are text whatever their values.
+    values meet in one property. ``_TEXT_PATHS`` are text whatever their values.
     """
     present = pl.any_horizontal(pl.col(column).is_not_null() for column in _VALUE_COLUMNS)
     stats = (
@@ -745,7 +749,7 @@ def _eav_values(
 def _field(path: str) -> tuple[str, str]:
     """The property set and key of an eav path: up to its last dot, and what follows it.
 
-    A path without a dot is a field of the object itself, in :data:`OBJECT_SET`.
+    A path without a dot is a field of the object itself, in ``OBJECT_SET``.
     """
     pset, _, key = path.rpartition(".")
     return pset or OBJECT_SET, key
@@ -883,7 +887,7 @@ def _flatten(obj: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     """Files an object's fields and property bag into sets named by dotted path.
 
     A value's set is the dotted path of the group it sits in; the object's own fields form
-    :data:`OBJECT_SET`. References, the structural fields and, on a mesh that is an element
+    ``OBJECT_SET``. References, the structural fields and, on a mesh that is an element
     itself, the geometry arrays are left out.
     """
     sets: dict[str, dict[str, Any]] = {}
@@ -975,7 +979,7 @@ def _model_unit(
 ) -> LinearUnit:
     """The model unit: the root's ``units``, else the bundle's, else the meshes' most common.
 
-    Without any of those the model is taken to be in metres, as :func:`bimpolars.read_ifc`
+    Without any of those the model is taken to be in metres, as ``bimpolars.read_ifc``
     assumes for an IFC without a length unit.
     """
     units = root.get("units")

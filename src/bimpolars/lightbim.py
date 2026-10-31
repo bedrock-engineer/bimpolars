@@ -3,16 +3,16 @@
 A structural analysis model reduces an element to what carries the load: a beam or a column
 to the line along its axis, a slab or a wall to the surface in its midplane, a footing to the
 plane it bears on, anything else to its footprint at the height of its centre of gravity.
-:func:`bimpolars.simple_features` with ``lightbim=True`` adds that reduction next to the
-footprint, in the three columns of :data:`LIGHTBIM_COLUMNS`:
+``bimpolars.simple_features`` with ``lightbim=True`` adds that reduction next to the
+footprint, in the three columns of ``LIGHTBIM_COLUMNS``:
 
-- ``lightbim``: the reduction as ISO WKB with Z in the BIM CRS (:data:`LIGHTBIM_DTYPE`): a
+- ``lightbim``: the reduction as ISO WKB with Z in the BIM CRS (``LIGHTBIM_DTYPE``): a
   ``LINESTRING Z`` for a curve member, a ``POLYGON Z`` or ``MULTIPOLYGON Z`` for the others.
-- ``lightbim_kind`` (:data:`KIND_DTYPE`): ``member`` (curve, surface, support or mass, which
+- ``lightbim_kind`` (``KIND_DTYPE``): ``member`` (curve, surface, support or mass, which
   sets the geometry), ``role`` (beam, column, brace, pile, slab, wall, plate, roof, footing,
   raft, stair or ramp) and ``load_bearing``.
-- ``lightbim_qa`` (:data:`QA_DTYPE`): ``rule``, which decided the member (``kind``, the
-  caller's expression; ``class``, the table :data:`CLASSES`; ``shape``, the box test),
+- ``lightbim_qa`` (``QA_DTYPE``): ``rule``, which decided the member (``kind``, the
+  caller's expression; ``class``, the table ``CLASSES``; ``shape``, the box test),
   ``source``, what placed the reduction (``extrusion`` from ``native_geom``, with
   ``, cuts ignored`` when the source clipped the sweep, or ``mesh``), and ``deviation``, the
   farthest any vertex of the mesh lies from the reduction's axis or plane, in CRS units: half
@@ -22,7 +22,7 @@ footprint, in the three columns of :data:`LIGHTBIM_COLUMNS`:
 The member comes from, in order: the ``kind`` expression the caller passes, the class table
 (IFC classes with their predefined type, and Revit categories), then the shape: the tightest
 of an upright box and the box around the mesh's principal axes, which is a surface when its
-smallest extent is :data:`SLENDERNESS` times smaller than the middle one (the plate test), else
+smallest extent is ``SLENDERNESS`` times smaller than the middle one (the plate test), else
 a curve when the middle extent is that much smaller than the largest (the line test), else a
 mass. The geometry's axis or plane comes from the element's native sweep when ``native_geom``
 has one (the centroid line of the profile, or its midplane), else from the box; its extent
@@ -76,7 +76,7 @@ LIGHTBIM_DTYPE = pl.Binary
 """The dtype of ``lightbim``: ISO WKB with Z coordinates."""
 
 LIGHTBIM_COLUMNS: tuple[str, ...] = ("lightbim", "lightbim_kind", "lightbim_qa")
-"""The columns :func:`lightbim_features` adds, in order."""
+"""The columns ``lightbim_features`` adds, in order."""
 
 SLENDERNESS = 4.0
 """The ratio between two extents of the box around a mesh that makes it a plate or a line."""
@@ -168,7 +168,7 @@ reinforcement, connections and stiffeners, which an analysis model carries in it
 its rows get null LightBIM columns. A ``support`` from this table whose shape is a vertical
 line (a pile exported as a footing) becomes a ``curve`` with the role ``pile``; a support the
 ``kind`` expression gives stays one. Edit the dict, or pass ``kind`` to
-:func:`lightbim_features`, to change the table.
+``lightbim_features``, to change the table.
 """
 
 
@@ -178,30 +178,30 @@ def lightbim_features(
     """The LightBIM columns of a frame that has its footprints.
 
     Args:
-        bdf: A BimDataFrame with ``class``, ``mesh``, ``bbox`` and the ``footprint`` of
-            :func:`bimpolars.simple_features`. ``properties`` and ``native_geom``
-            (:data:`bimpolars.NATIVE_GEOM_DTYPE`) are used when present. Keep the
-            ``properties`` sets ``attributes`` (the IFC ``PredefinedType``, which the class
-            table keys rafts on: without it an ``IfcSlab.BASESLAB`` is a floor), the
-            ``Pset_*Common`` sets (``LoadBearing``) and Revit's ``Structural`` parameter when
-            slimming a frame: without them ``load_bearing`` is the table's or null.
-        kind: An expression over the frame that decides the kind of a row ahead of the class
-            table and the shape test. It evaluates to a Struct with any of the fields
-            ``member``, ``role`` and ``load_bearing``, or to a String ``member``; a null
-            field falls through to the next rule, so an expression can set the kind of a
-            few rows (``pl.when(...).then(pl.lit({"member": "curve", "role": "beam"}))``)
-            or the role of all walls. A member that differs from the table's drops the
-            table's role: the orientation decides it (a curve or a surface) or it stays null.
+        bdf (BimDataFrame | pl.DataFrame): A BimDataFrame with ``class``, ``mesh``, ``bbox`` and the
+            ``footprint`` of ``bimpolars.simple_features``. ``properties`` and ``native_geom``
+            (``bimpolars.NATIVE_GEOM_DTYPE``) are used when present. Keep the ``properties`` sets
+            ``attributes`` (the IFC ``PredefinedType``, which the class table keys rafts on: without
+            it an ``IfcSlab.BASESLAB`` is a floor), the ``Pset_*Common`` sets (``LoadBearing``) and
+            Revit's ``Structural`` parameter when slimming a frame: without them ``load_bearing`` is
+            the table's or null.
+        kind (pl.Expr | None): An expression over the frame that decides the kind of a row ahead of
+            the class table and the shape test. It evaluates to a Struct with any of the fields
+            ``member``, ``role`` and ``load_bearing``, or to a String ``member``; a null field falls
+            through to the next rule, so an expression can set the kind of a few rows
+            (``pl.when(...).then(pl.lit({"member": "curve", "role": "beam"}))``) or the role of all
+            walls. A member that differs from the table's drops the table's role: the orientation
+            decides it (a curve or a surface) or it stays null.
 
     Returns:
-        A frame with the columns of :data:`LIGHTBIM_COLUMNS`, one row per row of ``bdf``:
+        pl.DataFrame: A frame with the columns of ``LIGHTBIM_COLUMNS``, one row per row of ``bdf``:
         null for a row without a mesh and for a class that is no member.
 
     Raises:
-        ValueError: If a required column is missing, or ``kind`` gives a member or a role
-            that is not in :data:`MEMBERS` or :data:`ROLES`.
-        TypeError: If ``kind`` evaluates to something other than a Struct or a String, or
-            ``native_geom`` has values of another layout than :data:`bimpolars.NATIVE_GEOM_DTYPE`.
+        ValueError: If a required column is missing.
+        ValueError: If ``kind`` gives a member or a role that is not in ``MEMBERS`` or ``ROLES``.
+        TypeError: If ``kind`` evaluates to something other than a Struct or a String.
+        TypeError: If ``native_geom`` has another layout than ``bimpolars.NATIVE_GEOM_DTYPE``.
     """
     frame = as_bim_dataframe(bdf).frame
     missing = [column for column in _REQUIRED_COLUMNS if column not in frame.columns]
@@ -348,9 +348,9 @@ def _decide(frame: pl.DataFrame, kind: pl.Expr | None) -> pl.DataFrame:
     """Per row, the member, role and load_bearing decided ahead of the shape, and the rule.
 
     Returns:
-        A frame with ``member`` and ``role`` (String, null when the shape or the orientation
-        decides), ``load_bearing`` (Boolean), ``rule`` (``kind``, ``class`` or ``shape``) and
-        ``skip`` (True for a class that is no member).
+        pl.DataFrame: A frame with ``member`` and ``role`` (String, null when the shape or the
+        orientation decides), ``load_bearing`` (Boolean), ``rule`` (``kind``, ``class`` or
+        ``shape``) and ``skip`` (True for a class that is no member).
     """
     override = _override(frame, kind)
     table = _table(frame)
@@ -558,14 +558,14 @@ def _sweep_line(sweep: dict[str, Any], member: str) -> _Line | None:
 
     The axis of a curve member is the sweep direction through the profile's centroid. Only a
     beam extruded across its width, whose profile is its side view (a slender profile,
-    :data:`SLENDERNESS` times longer than it is wide and than the depth), gets the profile's
+    ``SLENDERNESS`` times longer than it is wide and than the depth), gets the profile's
     long axis at mid-depth instead; a short stub keeps its extrusion as the axis. The normal
     of a surface is the sweep direction when the extrusion is no longer than the profile's
     short side (a slab), else the profile's short axis (a wall); the plane passes through the
     middle of the sweep.
 
     Returns:
-        None when the profile is degenerate.
+        _Line | None: None when the profile is degenerate.
     """
     placement = np.asarray(sweep["placement"], dtype=float).reshape(4, 4)
     profile = shapely.from_wkb(sweep["profile"])
@@ -629,7 +629,7 @@ def _tightest_box(vertices: _Floats) -> _Box:
 
     Three boxes are tried: one along the model axes, an upright one turned in plan to the
     principal axis of the vertices' plan positions, and one along the three principal axes
-    of the vertices (an inclined brace). Principal axes within :data:`SNAP_ANGLE` of a model
+    of the vertices (an inclined brace). Principal axes within ``SNAP_ANGLE`` of a model
     axis snap to it. A later box wins only when it is at least 5 % smaller.
     """
     mean = vertices.mean(axis=0)
@@ -654,7 +654,7 @@ def _tightest_box(vertices: _Floats) -> _Box:
 
 
 def _principal_direction(plan: _Floats) -> _Floats:
-    """The principal axis of 2D points, snapped to a model axis within :data:`SNAP_ANGLE`."""
+    """The principal axis of 2D points, snapped to a model axis within ``SNAP_ANGLE``."""
     if len(plan) < 2 or not plan.any():
         return np.array([1.0, 0.0])
     axis = np.linalg.svd(plan, full_matrices=False)[2][0]
@@ -666,7 +666,7 @@ def _principal_direction(plan: _Floats) -> _Floats:
 
 
 def _snapped(axes: _Floats) -> _Floats:
-    """Snaps principal axes within :data:`SNAP_ANGLE` of a model axis to it, kept orthonormal."""
+    """Snaps principal axes within ``SNAP_ANGLE`` of a model axis to it, kept orthonormal."""
     snapped: list[_Floats] = []
     for axis in axes:
         nearest = int(np.argmax(np.abs(axis)))

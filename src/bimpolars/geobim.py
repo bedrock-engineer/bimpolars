@@ -2,10 +2,10 @@
 
 The BIM CRS is the CRS of a model's BIM geometry columns, in its ``bim_crs`` column. Fresh from
 a reader it is a plain engineering CRS: the model's own Cartesian coordinates. Georeferencing
-says where that is on earth: :func:`georeferenced_bim_crs` turns a site origin and a rotation
+says where that is on earth: ``georeferenced_bim_crs`` turns a site origin and a rotation
 in a compound CRS of a projected and a vertical CRS, such as EPSG:7415 (RD New + NAP), into a
-georeferenced BIM CRS that PROJ can transform, :func:`set_crs` declares it as a model's CRS,
-:func:`to_crs` moves the geometry columns to any CRS pyproj knows, and :func:`with_geog` adds
+georeferenced BIM CRS that PROJ can transform, ``set_crs`` declares it as a model's CRS,
+``to_crs`` moves the geometry columns to any CRS pyproj knows, and ``with_geog`` adds
 the footprints in OGC:CRS84h next to the model's own, for GeoJSON and GeoParquet readers on
 the web.
 """
@@ -52,18 +52,18 @@ from bimpolars.lightbim import QA_DTYPE
 WKB_COLUMNS: tuple[str, ...] = tuple(
     column for column in GEOMETRY_COLUMNS if column not in COLUMN_CRS
 )
-"""The WKB columns in the BIM CRS that :func:`to_crs` moves, when present.
+"""The WKB columns in the BIM CRS that ``to_crs`` moves, when present.
 
-They are the :data:`bimpolars.geoparquet.GEOMETRY_COLUMNS` without the columns in a CRS of
-their own (:data:`bimpolars.geoparquet.COLUMN_CRS`): ``geog``, the footprints in OGC:CRS84h
-of :func:`with_geog`, never changes CRS.
+They are the ``bimpolars.geoparquet.GEOMETRY_COLUMNS`` without the columns in a CRS of
+their own (``bimpolars.geoparquet.COLUMN_CRS``): ``geog``, the footprints in OGC:CRS84h
+of ``with_geog``, never changes CRS.
 """
 
 AFFINE_TOLERANCE = 1e-6
 """How far, in metres, a transformation may stray from an affine fit and still be affine."""
 
 _PROBE_HALF_SIZE = 500.0
-"""The least half size, in metres, of the cube the affine fit of :func:`to_crs` probes."""
+"""The least half size, in metres, of the cube the affine fit of ``to_crs`` probes."""
 
 _PROBE_HALF_SIZE_DEGREES = 0.01
 """The same, in degrees, for a model stored in a geographic CRS: about a kilometre."""
@@ -101,28 +101,28 @@ def georeferenced_bim_crs(
     sits in the coefficients.
 
     Args:
-        compound_crs: A compound CRS of a projected and a vertical CRS, such as
+        compound_crs (CRSLike): A compound CRS of a projected and a vertical CRS, such as
             ``"EPSG:7415"`` (RD New + NAP height).
-        easting: Easting of the site origin, in the projected CRS's unit.
-        northing: Northing of the site origin, in the projected CRS's unit.
-        orthometric_height: Height of the site origin, in the vertical CRS's unit.
-        rotation: The angle in degrees from grid north to the model's y-axis, counterclockwise
-            positive; equally, from grid east to the model's x-axis. Grid north, not true north.
-            For an IfcMapConversion it is ``degrees(atan2(XAxisOrdinate, XAxisAbscissa))``.
-        unit: The model's length unit: the model itself (``unit=bdf``), whose unit it
-            copies, or any other unit :func:`bimpolars.crs.as_linear_unit` takes: a name
-            from :data:`bimpolars.crs.LINEAR_UNITS`, a :class:`bimpolars.LinearUnit`, or a
-            CRS.
-        name: The site's name, used in the names of the CRS and its parts: the CRS is
+        easting (float): Easting of the site origin, in the projected CRS's unit.
+        northing (float): Northing of the site origin, in the projected CRS's unit.
+        orthometric_height (float): Height of the site origin, in the vertical CRS's unit.
+        rotation (float): The angle in degrees from grid north to the model's y-axis,
+            counterclockwise positive; equally, from grid east to the model's x-axis. Grid north,
+            not true north. For an IfcMapConversion it is ``degrees(atan2(XAxisOrdinate,
+            XAxisAbscissa))``.
+        unit (LinearUnit | CRSLike | BimDataFrame): The model's length unit: the model itself
+            (``unit=bdf``), whose unit it copies, or any other unit ``bimpolars.crs.as_linear_unit``
+            takes: a name from ``bimpolars.crs.LINEAR_UNITS``, a ``bimpolars.LinearUnit``, or a CRS.
+        name (str): The site's name, used in the names of the CRS and its parts: the CRS is
             ``f"{name} georeferenced BIM CRS"``.
 
     Returns:
-        The georeferenced BIM CRS, for :func:`set_crs`.
+        pyproj.CRS: The georeferenced BIM CRS, for ``set_crs``.
 
     Raises:
-        ValueError: If ``compound_crs`` is not a compound CRS of a projected and a vertical CRS
-            that PROJ can derive from, or ``unit`` is neither a unit nor a CRS with a linear
-            unit.
+        ValueError: If ``compound_crs`` is not a compound CRS of a projected and a vertical CRS.
+        ValueError: If PROJ cannot derive a CRS from ``compound_crs``.
+        ValueError: If ``unit`` is neither a unit nor a CRS with a linear unit.
     """
     parsed, _ = resolve_crs(compound_crs)
     components = parsed.sub_crs_list
@@ -225,16 +225,17 @@ def set_crs(bdf: BimDataFrame | pl.DataFrame, crs: CRSLike) -> BimDataFrame:
 
     ``bim_crs`` becomes ``crs`` on every row, also on a frame that held several CRSs, and the
     geometry columns keep their values: ``crs`` states what they are in. Use it with the CRS
-    of :func:`georeferenced_bim_crs` to georeference a model whose reader gave it a plain
+    of ``georeferenced_bim_crs`` to georeference a model whose reader gave it a plain
     engineering CRS, with the same length unit.
 
     Args:
-        bdf: The model: a BimDataFrame, or a polars DataFrame with or without ``bim_crs``.
-        crs: The CRS: PROJJSON, a ``pyproj.CRS``, or user input such as ``"EPSG:7415"``.
+        bdf (BimDataFrame | pl.DataFrame): The model: a BimDataFrame, or a polars DataFrame with or
+            without ``bim_crs``.
+        crs (CRSLike): The CRS: PROJJSON, a ``pyproj.CRS``, or user input such as ``"EPSG:7415"``.
 
     Returns:
-        The same frame with ``crs`` in ``bim_crs``, as PROJJSON text (see
-        :func:`bimpolars.frame.with_crs_column`).
+        BimDataFrame: The same frame with ``crs`` in ``bim_crs``, as PROJJSON text (see
+        ``bimpolars.frame.with_crs_column``).
 
     Raises:
         ValueError: If pyproj cannot read ``crs``, or it does not have three axes.
@@ -250,7 +251,7 @@ def to_crs(bdf: BimDataFrame | pl.DataFrame, crs: CRSLike) -> BimDataFrame:
 
     One pyproj transformation from the BIM CRS to ``crs`` moves every coordinate of the
     geometry columns together, and ``bim_crs`` becomes ``crs``: the ``mesh`` vertices, the
-    WKB columns of :data:`WKB_COLUMNS` (``footprint`` and ``lightbim``), and ``elevation``,
+    WKB columns of ``WKB_COLUMNS`` (``footprint`` and ``lightbim``), and ``elevation``,
     the level of each storey, taken at the plan centre of the model. ``bbox`` is recomputed
     from the moved meshes; a frame without a ``mesh`` column gets the axis-aligned bounds of
     the moved corners of each box instead, which still covers the moved geometry (loosely,
@@ -258,11 +259,11 @@ def to_crs(bdf: BimDataFrame | pl.DataFrame, crs: CRSLike) -> BimDataFrame:
     EPSG:7415 is in metres.
 
     ``native_geom``, the sweeps a reader placed in the BIM CRS
-    (:data:`bimpolars.NATIVE_GEOM_DTYPE`), survives only an affine transformation (to the
-    ``compound_crs`` of a :func:`georeferenced_bim_crs`, for example): the matrix of
-    :func:`affine_transformation` is composed onto every sweep's ``placement``, scale
+    (``bimpolars.NATIVE_GEOM_DTYPE``), survives only an affine transformation (to the
+    ``compound_crs`` of a ``georeferenced_bim_crs``, for example): the matrix of
+    ``affine_transformation`` is composed onto every sweep's ``placement``, scale
     included, so that the profile and the depth stay in the sweep's own coordinates. The
-    column is nulled when the transformation is not affine within :data:`AFFINE_TOLERANCE`
+    column is nulled when the transformation is not affine within ``AFFINE_TOLERANCE``
     over the model's extent (and at least a kilometre), as it is to a geographic, geocentric
     or differently projected CRS. ``lightbim_qa.deviation``, a length, follows the change of
     unit the same way: it is scaled by the matrix's linear scale (the cube root of the
@@ -272,34 +273,36 @@ def to_crs(bdf: BimDataFrame | pl.DataFrame, crs: CRSLike) -> BimDataFrame:
     A model whose ``bim_crs`` holds more than one CRS is refused: one transformation for rows
     that start in different CRSs would put some of them in the wrong place. Move each CRS's
     rows on their own, for example over ``bdf.group_by("bim_crs")``. A model without rows comes
-    back as it is: it has no coordinates to move, and no CRS to move them from.
+    back as it is: it has no coordinates to move, and no CRS to move them from. A plain
+    engineering CRS is not georeferenced, so pyproj knows no transformation from it:
+    ``set_crs`` a georeferenced BIM CRS first.
 
     The transformation from or to a derived CRS, such as the compound of
-    :func:`georeferenced_bim_crs`, goes through its base CRS, so that PROJ's geodetic steps
-    see heights in the base CRS's unit (see :func:`_transformer`). When the best
+    ``georeferenced_bim_crs``, goes through its base CRS, so that PROJ's geodetic steps
+    see heights in the base CRS's unit (see ``_transformer``). When the best
     transformation PROJ knows needs grids that are not installed (RDNAPTRANS2018 needs the
     NSGI grids), a ``UserWarning`` names them and PROJ falls back to a less accurate
     operation.
 
     Args:
-        bdf: The model, in one CRS pyproj can transform from: a georeferenced BIM CRS of
-            :func:`georeferenced_bim_crs`, or any other georeferenced CRS. A polars
-            DataFrame with ``bim_crs`` works too.
-        crs: The target CRS: PROJJSON, a ``pyproj.CRS``, or user input such as
+        bdf (BimDataFrame | pl.DataFrame): The model, in one CRS pyproj can transform from: a
+            georeferenced BIM CRS of ``georeferenced_bim_crs``, or any other georeferenced CRS. A
+            polars DataFrame with ``bim_crs`` works too.
+        crs (CRSLike): The target CRS: PROJJSON, a ``pyproj.CRS``, or user input such as
             ``"EPSG:7415"`` or ``"OGC:CRS84h"``. It must have three axes, so that the meshes
             keep one unit per axis: ``"EPSG:28992"`` is refused, ``"EPSG:7415"`` works.
 
     Returns:
-        The model in ``crs``, with the geometry columns moved and ``crs`` in ``bim_crs``.
+        BimDataFrame: The model in ``crs``, with the geometry columns moved and ``crs`` in
+        ``bim_crs``.
 
     Raises:
-        ValueError: If the model has rows and ``bim_crs`` does not hold exactly one CRS, if
-            pyproj knows no transformation from the BIM CRS to ``crs`` (a plain engineering
-            CRS is not georeferenced: :func:`set_crs` it first), if ``crs`` does not have
-            three axes, or if a coordinate does not transform.
-        TypeError: If a column of :data:`WKB_COLUMNS` is not Binary, ``native_geom`` holds
-            values of another layout than :data:`bimpolars.NATIVE_GEOM_DTYPE` under an affine
-            transformation, or ``lightbim_qa`` is not :data:`bimpolars.lightbim.QA_DTYPE`.
+        ValueError: If the model has rows and ``bim_crs`` does not hold exactly one CRS.
+        ValueError: If pyproj knows no transformation from the BIM CRS to ``crs``.
+        ValueError: If ``crs`` does not have three axes, or a coordinate does not transform.
+        TypeError: If a column of ``WKB_COLUMNS`` is not Binary.
+        TypeError: If ``native_geom`` is not ``NATIVE_GEOM_DTYPE`` and the transformation is affine.
+        TypeError: If ``lightbim_qa`` is not ``bimpolars.lightbim.QA_DTYPE``.
     """
     bdf = as_bim_dataframe(bdf)
     if not len(bdf):
@@ -420,37 +423,37 @@ def with_geog(bdf: BimDataFrame | pl.DataFrame) -> BimDataFrame:
     """Adds ``geog``: the ``footprint`` of every row in OGC:CRS84h, for GeoJSON and the web.
 
     ``geog`` is the footprint moved to longitude and latitude in degrees and ellipsoidal height
-    in metres on WGS 84 (:data:`bimpolars.crs.CRS84H`), as ISO WKB in a Binary column: a
+    in metres on WGS 84 (``bimpolars.crs.CRS84H``), as ISO WKB in a Binary column: a
     ``POLYGON Z`` or ``MULTIPOLYGON Z``, null exactly when ``footprint`` is, and ``POLYGON Z
     EMPTY`` where the footprint is. That is the CRS GeoJSON (RFC 7946) means by its
     coordinates, so the column exports to GeoJSON as it is, and
-    :func:`bimpolars.geoparquet.geo_metadata` makes it the primary geometry column of the
-    written GeoParquet, with :data:`bimpolars.crs.CRS84H` as its CRS. The model keeps its own
-    CRS and its ``footprint`` next to it, and :func:`to_crs` leaves ``geog`` as it is;
-    :func:`bimpolars.simple_features` drops it when it computes the footprints again, so run
+    ``bimpolars.geoparquet.geo_metadata`` makes it the primary geometry column of the
+    written GeoParquet, with ``bimpolars.crs.CRS84H`` as its CRS. The model keeps its own
+    CRS and its ``footprint`` next to it, and ``to_crs`` leaves ``geog`` as it is;
+    ``bimpolars.simple_features`` drops it when it computes the footprints again, so run
     ``with_geog`` after it.
 
-    The transformation is the one :func:`to_crs` applies for ``"OGC:CRS84h"``, through the base
-    CRS of a georeferenced BIM CRS (see :func:`_transformer`), and it warns in the same way
+    The transformation is the one ``to_crs`` applies for ``"OGC:CRS84h"``, through the base
+    CRS of a georeferenced BIM CRS (see ``_transformer``), and it warns in the same way
     when PROJ's best transformation needs grids that are not installed: without the NSGI grids
     a Dutch site moves by a Helmert transformation that is good to about a metre, and its NAP
     heights pass off as ellipsoidal ones.
 
     Args:
-        bdf: The model with its ``footprint`` column (see :func:`bimpolars.simple_features`),
-            in one georeferenced CRS: the georeferenced BIM CRS of
-            :func:`georeferenced_bim_crs`, set with :func:`set_crs`, or any CRS pyproj can
-            transform to WGS 84. A polars DataFrame with ``bim_crs`` works too, and a model
-            without rows needs no CRS.
+        bdf (BimDataFrame | pl.DataFrame): The model with its ``footprint`` column (see
+            ``bimpolars.simple_features``), in one georeferenced CRS: the georeferenced BIM CRS of
+            ``georeferenced_bim_crs``, set with ``set_crs``, or any CRS pyproj can transform to WGS
+            84. A polars DataFrame with ``bim_crs`` works too, and a model without rows needs no
+            CRS.
 
     Returns:
-        The model with ``geog`` added (or replaced), in the same CRS.
+        BimDataFrame: The model with ``geog`` added (or replaced), in the same CRS.
 
     Raises:
-        ValueError: If the frame has no ``footprint`` column, or it has rows and ``bim_crs``
-            does not hold exactly one CRS, pyproj knows no transformation from the BIM CRS to
-            WGS 84 (a plain engineering CRS is not georeferenced: :func:`set_crs` it first),
-            or a coordinate does not transform.
+        ValueError: If the frame has no ``footprint`` column.
+        ValueError: If the frame has rows and ``bim_crs`` does not hold exactly one CRS.
+        ValueError: If pyproj knows no transformation from the BIM CRS to WGS 84.
+        ValueError: If a coordinate does not transform.
         TypeError: If ``footprint`` is not Binary.
     """
     bdf = as_bim_dataframe(bdf)
@@ -469,25 +472,25 @@ def with_geog(bdf: BimDataFrame | pl.DataFrame) -> BimDataFrame:
 def affine_transformation(
     bdf: BimDataFrame, crs: CRSLike
 ) -> np.ndarray[Any, np.dtype[np.float64]] | None:
-    """The 4x4 matrix that :func:`to_crs` applies to a placement, when there is one.
+    """The 4x4 matrix that ``to_crs`` applies to a placement, when there is one.
 
     The transformation from the BIM CRS to ``crs`` is probed on the corners of a cube around
     the model (its extent, at least a kilometre across) and fitted by least squares. It is
-    affine when no corner strays more than :data:`AFFINE_TOLERANCE` metres from the fit; a
+    affine when no corner strays more than ``AFFINE_TOLERANCE`` metres from the fit; a
     geographic or geocentric target never is. The matrix carries the change of unit: from a
     model in millimetres to EPSG:7415 its linear part has a scale of 0.001, which is why
-    :func:`to_crs` composes it onto a sweep's ``placement`` rather than onto its profile.
+    ``to_crs`` composes it onto a sweep's ``placement`` rather than onto its profile.
 
     Args:
-        bdf: The model.
-        crs: The target CRS, as for :func:`to_crs`.
+        bdf (BimDataFrame): The model.
+        crs (CRSLike): The target CRS, as for ``to_crs``.
 
     Returns:
-        The matrix from model coordinates to ``crs`` coordinates (homogeneous, row-major),
-        or None when the transformation is not affine over the model.
+        np.ndarray | None: The matrix from model coordinates to ``crs`` coordinates
+        (homogeneous, row-major), or None when the transformation is not affine over the model.
 
     Raises:
-        ValueError: As :func:`to_crs` raises it.
+        ValueError: As ``to_crs`` raises it.
     """
     transformer, source, target, _ = _prepare(bdf, crs)
     return _affine_matrix(transformer, source, target, bdf.frame)
@@ -501,16 +504,16 @@ def linearized_site_to_ecef(crs: CRSLike) -> np.ndarray[Any, np.dtype[np.float64
     the site origin lands, and each column is where one metre along a site axis points.
 
     Args:
-        crs: The georeferenced BIM CRS, as :func:`georeferenced_bim_crs` gives it (or
+        crs (CRSLike): The georeferenced BIM CRS, as ``georeferenced_bim_crs`` gives it (or
             ``bdf.crs``): PROJJSON, a ``pyproj.CRS``, or user input. Its axes must be in a
             linear unit.
 
     Returns:
-        A 4x4 matrix from site metres to ECEF metres.
+        np.ndarray: A 4x4 matrix from site metres to ECEF metres.
 
     Raises:
-        ValueError: If the CRS's axes are not in a linear unit, or pyproj knows no
-            transformation from it to ECEF.
+        ValueError: If the CRS's axes are not in a linear unit.
+        ValueError: If pyproj knows no transformation from the CRS to ECEF.
     """
     source, projjson = resolve_crs(crs)
     unit = _linear_unit(projjson)
@@ -532,7 +535,7 @@ def _prepare(
     """Reads the target CRS and builds the transformation from the BIM CRS to it.
 
     Returns:
-        The transformation, the BIM CRS, the target CRS and the target's PROJJSON.
+        tuple: The transformation, the BIM CRS, the target CRS and the target's PROJJSON.
     """
     target, projjson = resolve_crs(crs)
     _check_3d(target)
@@ -541,7 +544,7 @@ def _prepare(
 
 
 class _Transformation(Protocol):
-    """What :func:`_transform_points` needs: a ``pyproj.Transformer`` or a chain of them."""
+    """What ``_transform_points`` needs: a ``pyproj.Transformer`` or a chain of them."""
 
     @property
     def description(self) -> str: ...
@@ -568,7 +571,7 @@ class _Chain:
 def _transformer(source: pyproj.CRS, target: pyproj.CRS) -> _Transformation:
     """The transformation from the BIM CRS to a target, with x, y, z in that order.
 
-    A derived CRS (the compound of :func:`georeferenced_bim_crs`) is passed through its base
+    A derived CRS (the compound of ``georeferenced_bim_crs``) is passed through its base
     CRS: PROJ otherwise orders the deriving conversion of the vertical CRS after a geodetic
     step, so that a 3D Helmert transformation reads a site's millimetres as metres. The
     conversion to the base CRS is exact, so the chain costs nothing.
@@ -836,9 +839,9 @@ def _affine_matrix(
     """The 4x4 matrix of the transformation when it is affine over the model, else None.
 
     A geographic or geocentric target is never affine. Otherwise the transformation is probed
-    on the corners of a cube around the model (its extent, at least :data:`_PROBE_HALF_SIZE`
+    on the corners of a cube around the model (its extent, at least ``_PROBE_HALF_SIZE``
     metres each way) and fitted by least squares; it is affine when no corner strays more
-    than :data:`AFFINE_TOLERANCE` metres from the fit.
+    than ``AFFINE_TOLERANCE`` metres from the fit.
     """
     if target.is_geographic or target.is_geocentric:
         return None

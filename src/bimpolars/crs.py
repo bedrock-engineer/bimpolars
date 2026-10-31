@@ -1,10 +1,10 @@
 """Model coordinate reference systems: any CRS input in, PROJJSON stored.
 
 A BIM model lives in its own Cartesian coordinates. Until it is georeferenced, that is a plain
-`EngineeringCRS <https://proj.org/en/stable/specifications/projjson.html>`_: three axes in the
-model's length unit, without a relation to the earth. A :class:`bimpolars.BimDataFrame` stores
+EngineeringCRS (https://proj.org/en/stable/specifications/projjson.html): three axes in the
+model's length unit, without a relation to the earth. A ``bimpolars.BimDataFrame`` stores
 its CRS as PROJJSON text in its ``bim_crs`` column, which is what goes into the GeoParquet and
-glTF metadata; a CRS goes in in any form pyproj reads (:data:`CRSLike`).
+glTF metadata; a CRS goes in in any form pyproj reads (``CRSLike``).
 """
 
 from __future__ import annotations
@@ -100,7 +100,7 @@ CRS84H: dict[str, Any] = {
 }
 """OGC:CRS84h as PROJJSON: longitude, latitude (degrees) and ellipsoidal height (metres) on WGS 84.
 
-The CRS of the ``geog`` column that :func:`bimpolars.geobim.with_geog` adds, and what GeoJSON
+The CRS of the ``geog`` column that ``bimpolars.geobim.with_geog`` adds, and what GeoJSON
 means by its coordinates (RFC 7946: longitude, latitude and an elevation in metres above the
 WGS 84 ellipsoid). It is written out here, as ``pyproj.CRS("OGC:CRS84h").to_json_dict()`` gives
 it (PROJ 9.8), so that the metadata bimpolars writes does not change with the installed PROJ.
@@ -123,8 +123,8 @@ class LinearUnit(NamedTuple):
     """A length unit of a CRS axis.
 
     Attributes:
-        name: The unit's name, such as ``"millimetre"``.
-        conversion_factor: How many metres one unit is.
+        name (str): The unit's name, such as ``"millimetre"``.
+        conversion_factor (float): How many metres one unit is.
     """
 
     name: str
@@ -143,14 +143,14 @@ def engineering_crs(
     ``unit``. It says nothing about where the model is on earth.
 
     Args:
-        name: The CRS name, typically derived from the model's name.
-        unit: The length unit of the axes, as :func:`as_linear_unit` takes it: a name from
-            :data:`LINEAR_UNITS`, a :class:`LinearUnit`, or a CRS or a model whose unit it
-            copies.
-        datum: The name of the engineering datum: what the origin is anchored to.
+        name (str): The CRS name, typically derived from the model's name.
+        unit (LinearUnit | CRSLike | BimDataFrame): The length unit of the axes, as
+            ``as_linear_unit`` takes it: a name from ``LINEAR_UNITS``, a ``LinearUnit``, or a CRS or
+            a model whose unit it copies.
+        datum (str): The name of the engineering datum: what the origin is anchored to.
 
     Returns:
-        The CRS as a PROJJSON dict.
+        dict[str, Any]: The CRS as a PROJJSON dict.
 
     Raises:
         ValueError: If ``unit`` is neither a unit nor a CRS with a linear unit.
@@ -171,18 +171,18 @@ def engineering_crs(
 
 
 def as_linear_unit(unit: LinearUnit | CRSLike | BimDataFrame) -> LinearUnit:
-    """Resolves a unit given by name, as a :class:`LinearUnit`, or as the unit of a CRS.
+    """Resolves a unit given by name, as a ``LinearUnit``, or as the unit of a CRS.
 
     Args:
-        unit: A name from :data:`LINEAR_UNITS`, a :class:`LinearUnit` for any other unit, or a
-            CRS in any form or a model, whose first axis gives the unit.
+        unit (LinearUnit | CRSLike | BimDataFrame): A name from ``LINEAR_UNITS``, a ``LinearUnit``
+            for any other unit, or a CRS in any form or a model, whose first axis gives the unit.
 
     Returns:
-        The unit with its conversion factor to the metre.
+        LinearUnit: The unit with its conversion factor to the metre.
 
     Raises:
-        ValueError: If ``unit`` is neither a name :data:`LINEAR_UNITS` knows nor a CRS with a
-            linear unit.
+        ValueError: If ``unit`` is neither a name in ``LINEAR_UNITS`` nor a CRS.
+        ValueError: If ``unit`` is a CRS without a linear unit.
     """
     if isinstance(unit, LinearUnit):
         return unit
@@ -203,10 +203,10 @@ def unit_projjson(unit: LinearUnit) -> dict[str, Any]:
     """The PROJJSON of a linear unit, as an axis or a parameter carries it.
 
     Args:
-        unit: The unit.
+        unit (LinearUnit): The unit.
 
     Returns:
-        ``{"type": "LinearUnit", "name": ..., "conversion_factor": ...}``.
+        dict[str, Any]: ``{"type": "LinearUnit", "name": ..., "conversion_factor": ...}``.
     """
     return {
         "type": "LinearUnit",
@@ -219,15 +219,15 @@ def _linear_unit(crs: CRSLike | BimDataFrame) -> LinearUnit:
     """Reads the length unit of a CRS's first axis.
 
     Args:
-        crs: A CRS in any form (:data:`CRSLike`), or a model, whose CRS it reads. A compound
-            CRS is read through its first component.
+        crs (CRSLike | BimDataFrame): A CRS in any form (``CRSLike``), or a model, whose CRS it
+            reads. A compound CRS is read through its first component.
 
     Returns:
-        The unit's name and its conversion factor to the metre.
+        LinearUnit: The unit's name and its conversion factor to the metre.
 
     Raises:
-        ValueError: If pyproj cannot read the CRS, or it has no Cartesian axis with a linear
-            unit.
+        ValueError: If pyproj cannot read the CRS.
+        ValueError: If the CRS has no Cartesian axis with a linear unit.
     """
     node: Mapping[str, Any] = _projjson(crs)
     while "components" in node:
@@ -250,11 +250,11 @@ def resolve_crs(crs: CRSLike) -> tuple[pyproj.CRS, dict[str, Any]]:
     """Reads a CRS in any form with pyproj, and gives its PROJJSON too.
 
     Args:
-        crs: The CRS: PROJJSON, a ``pyproj.CRS``, or user input such as ``"EPSG:7415"``.
+        crs (CRSLike): The CRS: PROJJSON, a ``pyproj.CRS``, or user input such as ``"EPSG:7415"``.
 
     Returns:
-        The CRS as a ``pyproj.CRS`` and as PROJJSON: a copy of the caller's own when it passed
-        PROJJSON.
+        tuple[pyproj.CRS, dict[str, Any]]: The CRS as a ``pyproj.CRS`` and as PROJJSON: a copy of
+        the caller's own when it passed PROJJSON.
 
     Raises:
         ValueError: If pyproj cannot read ``crs``.
