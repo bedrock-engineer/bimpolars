@@ -243,9 +243,12 @@ def read_speckle(
       without one (specklepy's plain ``Model.to_base()`` gives none, unlike
       ``bimpolars.bundle.bundle_objects``) gets, with a bundle, the material the envelope
       attaches to the bundle geometry it came from (``def-geo-<geometry index>``). A mesh
-      without either is unstyled. A ``displayValue`` reference to an object the version
-      does not include is skipped, so a row whose geometry is only such references, or only
-      an instance of an empty definition, has no mesh.
+      without either takes the material of the nearest collection above its element that a
+      proxy targets: Rhino lists a layer's material under the layer's applicationId and
+      leaves out the objects whose material is by layer. A mesh without any is unstyled.
+      A ``displayValue`` reference to an object the version does not include is skipped, so
+      a row whose geometry is only such references, or only an instance of an empty
+      definition, has no mesh.
 
     The CRS is a plain engineering CRS in the root's ``units``, else the bundle's, else the
     unit most of the meshes name, else metres: the model's own coordinates. A Revit model's
@@ -284,10 +287,10 @@ def read_speckle(
     reader = _Reader(objects, unit, info)
 
     rows: dict[str, _Row] = {}
-    for obj in reader.elements(root):
+    for obj, layer_style in reader.elements(root):
         key = _row_key(obj)
         row = rows.setdefault(key, _Row(key))
-        reader.add(row, obj)
+        reader.add(row, obj, layer_style)
     model_name = name or _model_name(root, info)
     datum = "Speckle model origin"
     if info is not None and info.placement_source:
@@ -356,24 +359,35 @@ class _Reader:
         self._definition_parts: dict[str, list[_Part]] = {}
         self._mesh_parts: dict[str, _Part | None] = {}
 
-    def elements(self, root: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
-        """The element objects under the root, depth first through the collections."""
+    def elements(self, root: Mapping[str, Any]) -> Iterator[tuple[Mapping[str, Any], Style | None]]:
+        """The element objects under the root, depth first through the collections.
+
+        Each comes with the material of the nearest collection above it that has one: Rhino
+        lists a layer's material under the layer's applicationId, which its Collection
+        carries, and an object whose material is by layer under no id at all.
+        """
         seen: set[int] = set()
 
-        def walk(obj: Mapping[str, Any]) -> Iterator[Mapping[str, Any]]:
+        def walk(
+            obj: Mapping[str, Any], layer_style: Style | None
+        ) -> Iterator[tuple[Mapping[str, Any], Style | None]]:
             if id(obj) in seen:
                 return
             seen.add(id(obj))
-            if not _is_type(obj, _COLLECTION_TYPE):
-                app_id = obj.get("applicationId")
-                if not (isinstance(app_id, str) and app_id in self.definition_content):
-                    yield obj
+            app_id = obj.get("applicationId")
+            if _is_type(obj, _COLLECTION_TYPE):
+                own = self.materials.get(app_id) if isinstance(app_id, str) else None
+                layer_style = own if own is not None else layer_style
+            elif not (isinstance(app_id, str) and app_id in self.definition_content):
+                yield obj, layer_style
             for child in self.referenced(obj.get("elements")):
                 if not _is_type(child, _CHUNK_TYPE):
-                    yield from walk(child)
+                    yield from walk(child, layer_style)
 
+        root_id = root.get("applicationId")
+        root_style = self.materials.get(root_id) if isinstance(root_id, str) else None
         for child in self.referenced(root.get("elements")):
-            yield from walk(child)
+            yield from walk(child, root_style)
 
     def referenced(self, items: Any) -> Iterator[Mapping[str, Any]]:
         """The objects behind a list of references (or inline objects)."""
@@ -407,15 +421,18 @@ class _Reader:
                 out.append(item)
         return out
 
-    def add(self, row: _Row, obj: Mapping[str, Any]) -> None:
-        """Adds an element object's fields and geometry to its row."""
+    def add(self, row: _Row, obj: Mapping[str, Any], layer_style: Style | None = None) -> None:
+        """Adds an element object's fields and geometry to its row.
+
+        ``layer_style`` styles the meshes that neither they nor the object have a material for.
+        """
         app_id = obj.get("applicationId")
         speckle_type = obj.get("speckle_type")
         if not isinstance(speckle_type, str):
             speckle_type = None  # a missing type stays missing, so that the class can be null
         if _is_type(obj, _INSTANCE_TYPE):
             row.speckle_type = row.speckle_type or speckle_type
-            row.parts.extend(self.instance_parts(obj, set()))
+            row.parts.extend(self.instance_parts(obj, set(), layer_style))
             return
         if row.name is None and isinstance(obj.get("name"), str):
             row.name = obj["name"]
@@ -428,6 +445,8 @@ class _Reader:
             for key, value in values.items():
                 target.setdefault(key, value)
         fallback = self.materials.get(str(app_id)) if app_id else None
+        if fallback is None:
+            fallback = layer_style
         for mesh_id, part in self.object_parts(obj):
             # A mesh and the DataObject that displays it can share an applicationId and both
             # be listed: the mesh counts once
@@ -506,8 +525,10 @@ class _Reader:
         self._definition_parts[definition_id] = parts
         return parts
 
-    def instance_parts(self, instance: Mapping[str, Any], active: set[str]) -> list[_Part]:
-        """An instance's parts: its definition's, moved, the instance's material filling in."""
+    def instance_parts(
+        self, instance: Mapping[str, Any], active: set[str], layer_style: Style | None = None
+    ) -> list[_Part]:
+        """An instance's parts: its definition's, moved, its or its layer's material filling in."""
         definition_id = instance.get("definitionId")
         if not isinstance(definition_id, str):
             return []
@@ -516,6 +537,8 @@ class _Reader:
         fallback = None
         if isinstance(app_id, str):
             fallback = self.materials.get(app_id) or self.materials.get(_row_key(instance))
+        if fallback is None:
+            fallback = layer_style
         parts = []
         for vertices, faces, style in self.definition_parts(definition_id, active):
             moved = vertices @ matrix[:3, :3].T + matrix[:3, 3]

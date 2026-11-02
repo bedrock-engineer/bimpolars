@@ -418,6 +418,75 @@ def test_styles_from_the_render_material_proxies(bare: BimDataFrame) -> None:
     assert sorted((style["name"], style["face_count"]) for style in beam) == [("Steel", 24)]
 
 
+LAYER_TYPE = "Speckle.Core.Models.Collections.Collection:Objects.Other.Layer"
+
+
+def layer(object_id: str, app_id: str, name: str, elements: list[str]) -> dict[str, Any]:
+    return {
+        "id": object_id,
+        "speckle_type": LAYER_TYPE,
+        "applicationId": app_id,
+        "name": name,
+        "elements": [ref(element) for element in elements],
+    }
+
+
+def layered_objects() -> list[dict[str, Any]]:
+    """A Rhino model whose materials are by layer: the proxies target the layers' Collections,
+    except one mesh with a material of its own."""
+    box = [int(v) for v in BOX_FACES.split(",")]
+    objects: list[dict[str, Any]] = [
+        mesh("ground", BOX_VERTICES, box, app_id="g1"),
+        mesh("road", BOX_VERTICES, box, app_id="r1"),
+        mesh("marked-road", BOX_VERTICES, box, app_id="r2"),
+        mesh("ditch", BOX_VERTICES, box, app_id="x1"),
+        mesh("loose", BOX_VERTICES, box, app_id="l1"),
+        mesh("def-mesh", BOX_VERTICES, box, app_id="def-geo-0"),
+        instance("tree", "t1", "def-tree", (0, 0, 0)),
+        # Topography > Roads (a material of its own), Topography > Water (none: Topography's)
+        layer("roads", "layer-roads", "Roads", ["road", "marked-road"]),
+        layer("water", "layer-water", "Water", ["ditch", "tree"]),
+        layer("topo", "layer-topo", "Topography", ["ground", "roads", "water"]),
+        layer("other", "layer-other", "Other", ["loose"]),
+    ]
+    root = {
+        "id": "root",
+        "speckle_type": "Speckle.Core.Models.Collections.Collection",
+        "applicationId": "root",
+        "name": "Rhino",
+        "units": "m",
+        "elements": [ref("topo"), ref("other")],
+        "instanceDefinitionProxies": [definition("def-tree", ["def-geo-0"])],
+        "renderMaterialProxies": [
+            material_proxy("Grass", -16744448, 1.0, ["layer-topo"]),
+            material_proxy("Asphalt", -12566464, 1.0, ["layer-roads"]),
+            material_proxy("Paint", -1, 1.0, ["r2"]),
+        ],
+        "__closure": {obj["id"]: 1 for obj in objects},
+    }
+    return [root, *objects]
+
+
+def test_an_element_without_a_material_takes_its_layers() -> None:
+    bdf = read_speckle(layered_objects())
+    frame = bdf.frame
+    styles = {
+        row_id: [(style["name"], style["face_count"]) for style in mesh_row["styles"]]
+        for row_id, mesh_row in frame.select("id", "mesh").iter_rows()
+    }
+    assert styles == {
+        "g1": [("Grass", 12)],  # its layer's
+        "r1": [("Asphalt", 12)],  # the nearest layer's, not the parent layer's
+        "r2": [("Paint", 12)],  # its own material wins over its layer's
+        "x1": [("Grass", 12)],  # Water has none: the layer above it
+        "t1": [("Grass", 12)],  # an instance takes its layer's too
+        "l1": [(None, 12)],  # no layer above it has a material: unstyled
+    }
+    ground = row(bdf, "g1")["mesh"]["styles"][0]
+    assert ground["rgba"] == pytest.approx([0.0, 128 / 255, 0.0, 1.0])
+    assert {"layer-topo", "layer-roads", "layer-water", "layer-other"}.isdisjoint(frame["id"])
+
+
 def test_properties_layout(bare: BimDataFrame) -> None:
     psets = bare.frame.schema["properties"].to_schema()
     assert set(psets) == {OBJECT_SET, "properties", "properties.Parameters.Dimensions", "location"}
