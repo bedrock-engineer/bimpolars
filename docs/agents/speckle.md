@@ -35,7 +35,9 @@ projected CRSs and footprints projected to XY).
   reads as one. Values keep the unit the eav `unit` column states (lengths mm, areas m²,
   volumes m³), never scaled.
 - Styles: the root's `renderMaterialProxies` (first proxy that targets the mesh, the element or
-  the instance wins), then the envelope's `HAS_MATERIAL` for definition geometry. Every mesh of
+  the instance wins), then the envelope's `HAS_MATERIAL` for definition geometry, then the
+  nearest collection above the element that a proxy targets (Rhino lists a layer's material
+  under its Collection's applicationId and the objects by layer under none). Every mesh of
   an element carries the element's applicationId, so a layered wall or ceiling gets its first
   layer's material on all faces (#20 is the per-layer follow-up through the envelope's
   `DISPLAY` order).
